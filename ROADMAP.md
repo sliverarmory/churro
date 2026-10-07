@@ -26,9 +26,10 @@ Baseline proof: [Windows Actions run 37554694955](https://github.com/sliverarmor
 at `0cff53bd0733d353c642ba8cff346894a74a8552`.
 
 Implementation checkpoint: [PR #1](https://github.com/sliverarmory/churro/pull/1)
-on `feat/fritter-parity`. Local `go test ./...`, `go test -race ./...`,
-`go vet ./...`, all 11 cross-builds, and a byte-for-byte pinned loader
-rebuild passed. Windows execution evidence is recorded below.
+on `feat/fritter-parity` at `2e25176a5eda95de514fd95511fbc7edcae57c34`.
+Local `go test ./...`, `go test -race ./...`, `go vet ./...`, all 11
+cross-builds, and a byte-for-byte pinned loader rebuild passed. Windows
+execution evidence is recorded below.
 
 ## 1. Public API and CLI parity
 
@@ -48,22 +49,19 @@ rebuild passed. Windows execution evidence is recorded below.
   staged-module placement where compatibility is useful; document any
   deliberate default differences.
 
-- [ ] Copy Base64 CLI output to the Windows clipboard as CF_TEXT on a best-effort
-  basis, matching Fritter's convenience side effect. The pure Go implementation
-  and focused CLI tests are in the working tree; Windows clipboard readback and
-  a committed implementation remain to be verified.
-- [ ] Default staged-module output to the process working directory, matching
+- [x] Copy Base64 CLI output to the Windows clipboard as CF_TEXT on a best-effort
+  basis, matching Fritter's convenience side effect; the Windows readback test
+  passed.
+- [x] Default staged-module output to the process working directory, matching
   Fritter even when the loader output is in another directory. Write the module
-  before the loader and print a concise native-compatible success report. The
-  CLI changes and focused tests are in the working tree; a committed
-  implementation remains to be verified.
-- [ ] Reject loader or staged-module output paths that alias the input or each
-  other, including symlinks, hard links, and Windows case variants. Focused
-  tests pass locally; the fix remains to be committed.
-- [ ] Honor context cancellation during compression, encryption, loader
+  before the loader and print a concise native-compatible success report;
+  focused CLI tests and Windows package tests passed.
+- [x] Reject loader or staged-module output paths that alias the input or each
+  other, including symlinks, hard links, and Windows case variants; focused
+  CLI tests and Windows package tests passed.
+- [x] Honor context cancellation during compression, encryption, loader
   assembly, and output formatting, and let `Close` finish promptly after a
-  canceled generation. Deterministic local tests and race tests pass; the
-  implementation remains to be committed.
+  canceled generation; deterministic unit and race tests passed.
 
 Churro wraps invalid generation inputs in `GenerationError` so callers can use
 stable codes. The underlying `ValidationError` remains available through
@@ -107,14 +105,13 @@ stable codes. The underlying `ValidationError` remains available through
   Windows after the native dispatch change.
 - [x] Execute `ExitProcess` and `ExitBlock` as bounded CLI cases with markers.
 - [x] Execute native DLL loaders with `EntropyNone` and `EntropyNames`.
-- [ ] Execute a native DLL ANSI export argument containing non-ASCII text under
-  the Windows ANSI code page after the native loader rebuild; local source and
-  wire tests do not establish Windows runtime behavior.
-- [ ] Re-run the full Windows payload, CLR v2, custom-bundle, and clipboard
+- [x] Execute a native DLL ANSI export argument containing non-ASCII text under
+  Windows ANSI code page 1252 after the native loader rebuild.
+- [x] Re-run the full Windows payload, CLR v2, custom-bundle, and clipboard
   checks at the commit containing the rebuilt native loader images.
 - [x] Stress public generator reuse, concurrency, output uniqueness, and
   staged-request immutability.
-- [ ] Repeat the generated Sliver session check after all loader changes and
+- [x] Repeat the generated Sliver session check after all loader changes and
   require a matching `SessionOpenedEvent` plus `GetSessions` entry.
 
 ## 4. Distribution
@@ -126,29 +123,28 @@ stable codes. The underlying `ValidationError` remains available through
   sidecars, and SHA-256 checksums; all 11 were independently checked.
 - [ ] Publish and verify a tagged GitHub release from the final tested commit.
 
-## Previous green checkpoint
+## Completion evidence
 
-The implementation commit is `dfff600419af817798894ee9a7df570b60225b93`.
-Its [Windows payload job](https://github.com/sliverarmory/churro/actions/runs/37567275171/job/112617978831)
-passed 27 cases, including the added-import native bundle, CLR v4 arguments,
-entropy and exit modes. The [CLR v2 job](https://github.com/sliverarmory/churro/actions/runs/37567275171/job/112617751451)
+The complete [Windows Actions run 37570256457](https://github.com/sliverarmory/churro/actions/runs/37570256457)
+passed 16 of 16 jobs at implementation commit
+`2e25176a5eda95de514fd95511fbc7edcae57c34`. Its
+[Windows payload job](https://github.com/sliverarmory/churro/actions/runs/37570256457/job/112627274461)
+passed 28 cases, including a non-ASCII native DLL argument on Windows ANSI
+code page 1252, custom imports, CLR v4 arguments, entropy and exit modes.
+The separate `TestWindowsClipboardCFTextReadback` test passed in that job.
+The [CLR v2 job](https://github.com/sliverarmory/churro/actions/runs/37570256457/job/112627045016)
 passed managed EXE and DLL cases with and without quoted arguments. The
-[native bundle build job](https://github.com/sliverarmory/churro/actions/runs/37567275171/job/112617751315)
-compiled the 62-import image and generated a CLI loader from it. All 11 CLI
-archives from this run were checked independently: archive SHA-256 sidecars,
-commit sidecars, embedded `SOURCE_COMMIT`, nonempty binaries, and the five
-packaged documentation files matched the implementation commit. The sorted
-checksum-manifest SHA-256 is
-`0fd26a096eb5e0f02962be0978ca6e2c0a37aa7876df653c6f96193f08586b41`.
+[native bundle build job](https://github.com/sliverarmory/churro/actions/runs/37570256457/job/112627045186)
+compiled a 62-import image and generated a CLI loader from it.
 
-The complete [Windows Actions run 37567275171](https://github.com/sliverarmory/churro/actions/runs/37567275171)
-passed 16 of 16 jobs at the implementation commit. Its
-[Sliver session job](https://github.com/sliverarmory/churro/actions/runs/37567275171/job/112617751554)
+The [Sliver session job](https://github.com/sliverarmory/churro/actions/runs/37570256457/job/112627045302)
 observed `SessionOpenedEvent` ID
-`1a2b074b-50e3-4df6-a3b9-de131552222b` on mTLS and confirmed the same
-session in `GetSessions`.
+`84b07f33-7814-4332-8f0e-9cd1708f5812` on mTLS and confirmed the same
+session in `GetSessions`. All 11 CLI archives from the run were independently
+checked for SHA-256 and commit sidecars, embedded `SOURCE_COMMIT`, nonempty
+binaries, and five byte-matching packaged documents. The sorted
+checksum-manifest SHA-256 is
+`c9080d0b56160362acf798af7a1074bb223b617f0799c785be0008c356d7c570`.
 
-The new ANSI loader, cancellation, and CLI parity changes pass local unit,
-race, and vet checks. Their final Windows Actions and Sliver execution evidence
-remains pending. Tagged-release publication also remains pending; no release
-tag or release assets have been published.
+Tagged-release publication remains pending; no release tag or release assets
+have been published.
