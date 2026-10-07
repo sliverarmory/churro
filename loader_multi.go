@@ -20,10 +20,9 @@ const (
 )
 
 func residentLoaderFunction(fn LoaderFunction) bool {
-	// The loader entry and the hash resolver can be called concurrently
-	// after CreateThread. Only sections with no concurrent callers may be
-	// toggled between encrypted and executable bytes by the dispatcher.
-	return strings.HasPrefix(fn.Name, ".text") || fn.Name == ".hash_ch"
+	// The shim calls .text directly. Every other section, including the hash
+	// resolver, uses the dispatcher's synchronized decrypt/call/encrypt path.
+	return strings.HasPrefix(fn.Name, ".text")
 }
 
 func embeddedLoaderMetadata(second bool) (LoaderMetadata, error) {
@@ -120,6 +119,9 @@ func prepareCombinedWithMetadataContext(ctx context.Context, loaderImage, shimIm
 	ft := bytes.Index(combined[:len(shimImage)], marker)
 	if ft < 0 || ft+16+(len(meta.Functions)+1)*12 > len(shimImage) {
 		return nil, fmt.Errorf("dispatch shim function table is missing or too small")
+	}
+	if ft&1 != 0 {
+		return nil, fmt.Errorf("dispatch shim function table state is not 2-byte aligned")
 	}
 	if bytes.Index(combined[ft+1:len(shimImage)], marker) >= 0 {
 		return nil, fmt.Errorf("dispatch shim function table marker is ambiguous")
@@ -250,10 +252,11 @@ func emitNativeThunk(targetOff, fnID uint32, dispatcherRel int32, swapped, rever
 // nativeDispatchEmitter writes x64 instructions while keeping entropy and
 // RIP-relative offsets tied to the final instruction positions.
 type nativeDispatchEmitter struct {
-	code    []byte
-	entropy io.Reader
-	err     error
-	selfOff uint32
+	code       []byte
+	entropy    io.Reader
+	err        error
+	selfOff    uint32
+	junkBudget int
 }
 
 func (e *nativeDispatchEmitter) put(v ...byte) { e.code = append(e.code, v...) }
@@ -280,7 +283,12 @@ func (e *nativeDispatchEmitter) junkChoice(choice byte) {
 	if choice&1 == 0 {
 		return
 	}
-	switch 1 + ((choice >> 1) & 3) {
+	length := 1 + int((choice>>1)&3)
+	if length > e.junkBudget {
+		return
+	}
+	e.junkBudget -= length
+	switch length {
 	case 1:
 		e.put(0x90)
 	case 2:
@@ -321,11 +329,78 @@ func (e *nativeDispatchEmitter) stateLoad(dst, base, disp byte, zeroExtend bool)
 	} else {
 		e.put(0x8b)
 	}
+	e.stateAddr(dst, base, disp)
+}
+
+// stateAddr encodes mod=01, disp8 memory access through r12..r15. r12
+// requires a SIB byte; r13 must use disp8 even at offset zero.
+func (e *nativeDispatchEmitter) stateAddr(reg, base, disp byte) {
 	if base&7 == 4 {
-		e.put(0x40|(dst&7)<<3|4, 0x24, disp)
+		e.put(0x40|(reg&7)<<3|4, 0x24, disp)
 	} else {
-		e.put(0x40|(dst&7)<<3|(base&7), disp)
+		e.put(0x40|(reg&7)<<3|(base&7), disp)
 	}
+}
+
+func (e *nativeDispatchEmitter) stateBit(base byte, clear bool) {
+	// LOCK BTS/BTR bit 15 of the aligned 16-bit FN_ENTRY._pad. The high bit
+	// is the transition lock; the low 15 bits count active section calls.
+	group := byte(5) // BTS: acquire
+	if clear {
+		group = 6 // BTR: release
+	}
+	e.put(0x66, 0xf0, 0x41, 0x0f, 0xba)
+	e.stateAddr(group, base, 10)
+	e.put(15)
+}
+
+func (e *nativeDispatchEmitter) stateCompare(base byte, value uint16) {
+	// CMP word ptr [base+10], imm16.
+	e.put(0x66, 0x41, 0x81)
+	e.stateAddr(7, base, 10)
+	e.code = binary.LittleEndian.AppendUint16(e.code, value)
+}
+
+func (e *nativeDispatchEmitter) stateCount(base byte, decrement bool) {
+	group := byte(0) // INC word ptr [base+10]
+	if decrement {
+		group = 1 // DEC word ptr [base+10]
+	}
+	e.put(0x66, 0x41, 0xff)
+	e.stateAddr(group, base, 10)
+}
+
+func (e *nativeDispatchEmitter) shortJump(op byte, target int) {
+	rel := target - len(e.code) - 2
+	if rel < -128 || rel > 127 {
+		e.err = fmt.Errorf("dispatcher branch exceeds rel8 range")
+		return
+	}
+	e.put(op, byte(int8(rel)))
+}
+
+func (e *nativeDispatchEmitter) pendingShortJump(op byte) int {
+	e.put(op, 0)
+	return len(e.code) - 1
+}
+
+func (e *nativeDispatchEmitter) resolveShortJump(displacementAt int) {
+	rel := len(e.code) - displacementAt - 1
+	if rel < -128 || rel > 127 {
+		e.err = fmt.Errorf("dispatcher branch exceeds rel8 range")
+		return
+	}
+	e.code[displacementAt] = byte(int8(rel))
+}
+
+func (e *nativeDispatchEmitter) acquireState(base byte) int {
+	spin := len(e.code)
+	e.put(0xf3, 0x90) // PAUSE during contention.
+	e.stateBit(base, false)
+	gotLock := e.pendingShortJump(0x73) // JNC: BTS saw an unlocked entry.
+	e.shortJump(0xeb, spin)
+	e.resolveShortJump(gotLock)
+	return spin
 }
 
 // xorLoop toggles one protected section. Each invocation chooses its own
@@ -395,7 +470,7 @@ func emitNativeDispatcher(selfOff, loaderOff, ftOff uint32, swapped bool, entrop
 	if entropy == nil {
 		return nil, fmt.Errorf("missing dispatcher entropy source")
 	}
-	e := nativeDispatchEmitter{code: make([]byte, 0, dispatchSlotSize), entropy: entropy, selfOff: selfOff}
+	e := nativeDispatchEmitter{code: make([]byte, 0, dispatchSlotSize), entropy: entropy, selfOff: selfOff, junkBudget: 40}
 	roles := [4]byte{12, 13, 14, 15} // table pointer, offset, size, key
 	for i := len(roles) - 1; i > 0; i-- {
 		j := int(e.randomByte()) % (i + 1)
@@ -445,13 +520,31 @@ func emitNativeDispatcher(selfOff, loaderOff, ftOff uint32, swapped bool, entrop
 	e.junk()
 	e.stateLoad(key, ptr, 8, true)
 	e.junk()
+	// The table entry must survive the callee call. The shim reads flags
+	// before loader entry; its two reserved bytes are exclusively owned by
+	// the dispatcher while the loader runs.
+	e.put(0x4c, 0x89, 0x44|(ptrLow<<3), 0x24, 0x48) // [rsp+0x48] = table entry
 	e.put(0x48, 0x8d, 0x05)
-	e.rip(loaderOff)               // RAX = loader base
-	e.put(0x49, 0x89, 0xc0|ptrLow) // PTR = loader base
+	e.rip(loaderOff) // RAX = loader base
 	e.junk()
 	e.put(0x4c, 0x01, 0xc0|(offLow<<3)) // RAX += section offset
 	e.put(0x48, 0x89, 0xc7)             // RDI = section base
-	e.xorLoop(size, key)                // decrypt
+	spin := e.acquireState(ptr)
+	// If 32,767 calls are already active, release and wait for a return
+	// instead of overflowing the 15-bit count and encrypting live code.
+	e.stateCompare(ptr, 0xffff)
+	hasCapacity := e.pendingShortJump(0x75) // JNE
+	e.stateBit(ptr, true)
+	e.shortJump(0xeb, spin)
+	e.resolveShortJump(hasCapacity)
+	e.stateCompare(ptr, 0x8000)              // lock held, count zero
+	alreadyPlain := e.pendingShortJump(0x75) // JNE
+	e.xorLoop(size, key)                     // first entrant decrypts under the transition lock
+	e.resolveShortJump(alreadyPlain)
+	e.stateCount(ptr, false)
+	e.stateBit(ptr, true)
+	e.put(0x4c, 0x8d, 0x05|(ptrLow<<3)) // PTR = loader base
+	e.rip(loaderOff)
 	e.put(0x48, 0x8b, 0x4c, 0x24, 0x20) // restore RCX
 	e.junk()
 	e.put(0x48, 0x8b, 0x54, 0x24, 0x28) // restore RDX
@@ -464,10 +557,17 @@ func emitNativeDispatcher(selfOff, loaderOff, ftOff uint32, swapped bool, entrop
 	e.junk()
 	e.put(0x4c, 0x01, 0xc0|(targetSrc<<3)) // RAX += target offset
 	e.junk()
-	e.put(0xff, 0xd0)                   // call RAX
-	e.put(0x48, 0x89, 0x44, 0x24, 0x40) // save return value
-	e.put(0x48, 0x89, 0xf8)             // RAX = section base
-	e.xorLoop(size, key)                // re-encrypt, independently varied
+	e.put(0xff, 0xd0)                               // call RAX
+	e.put(0x48, 0x89, 0x44, 0x24, 0x40)             // save return value
+	e.put(0x4c, 0x8b, 0x44|(ptrLow<<3), 0x24, 0x48) // PTR = table entry
+	e.acquireState(ptr)
+	e.stateCount(ptr, true)
+	e.stateCompare(ptr, 0x8000)             // lock held, count zero
+	stillActive := e.pendingShortJump(0x75) // JNE
+	e.put(0x48, 0x89, 0xf8)                 // RAX = section base
+	e.xorLoop(size, key)                    // final return re-encrypts under the lock
+	e.resolveShortJump(stillActive)
+	e.stateBit(ptr, true)
 	e.put(0x48, 0x8b, 0x44, 0x24, 0x40) // restore return value
 	e.put(0x48, 0x83, 0xc4, 0x60)
 	for i := len(saveOrder) - 1; i >= 0; i-- {

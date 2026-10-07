@@ -13,9 +13,10 @@ declarations were replaced with local declarations. The new images therefore
 differ from the original Fritter build. The loader PE extractor emits six code
 sections and 62 cross-section references for each PEB variant. Churro uses the
 JSON metadata to patch those references and manage the protected sections at
-generation time. `.text` and `.hash_ch`
-remain resident because the hash resolver can be called on concurrent
-threads; the other four sections are dispatched on demand.
+generation time. `.text` stays resident. The other five sections, including
+`.hash_ch`, are dispatched on demand. The dispatcher counts active calls per
+section and encrypts a section after its final caller returns, so concurrent
+hash-resolver calls can share decrypted code safely.
 
 `bundle.json` records schema version 1, the Poly cipher/hash constants, the
 API import order, both function/reference tables, and SHA-256 hashes for

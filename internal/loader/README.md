@@ -21,11 +21,12 @@ Churro carries these source changes:
   packer implementation. The copied Fritter source and our changes are
   distributed under the repository's BSD 3-Clause license.
 
-In multi-section output, `.text` and `.hash_ch` stay resident. The hash
-resolver can run on both the loader thread and a newly created module thread;
-encrypting it during another call would race. The other four sections use
-call thunks. The shim's protection and wipe length includes the appended
-dispatcher and thunk tail.
+In multi-section output, `.text` stays resident. The other five sections use
+call thunks, including `.hash_ch`. The dispatcher uses a per-section lock and
+active-call count to decrypt on first entry and encrypt after the final return.
+This permits the hash resolver to run on both the loader thread and a newly
+created module thread. The shim's protection and wipe length includes the
+appended dispatcher and thunk tail.
 
 Host continuation resolves `RtlCaptureContext` through the existing PEB/hash
 resolver to capture the running thread before `NtContinue`. This keeps the

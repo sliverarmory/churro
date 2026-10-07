@@ -76,6 +76,8 @@ jobs:
           path: ${{ runner.temp }}/churro-custom-api-bundle
       - name: Test Go packages
         run: go test ./...
+      - name: Verify concurrent protected hash dispatch
+        run: go test -v . -run '^TestWindowsProtectedHashConcurrent$' -count=1
       - name: Test Windows clipboard readback
         env:
           CHURRO_TEST_CLIPBOARD: "1"

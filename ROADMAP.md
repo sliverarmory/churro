@@ -81,12 +81,12 @@ stable codes. The underlying `ValidationError` remains available through
   exercise the native C loader's depacker. Keep source provenance clear.
 - [x] Support section-granular encrypted dispatch: the embedded MinGW images have
   six sections and 62 cross-section references per PEB variant. Four helper
-  sections are protected; `.text` and the hash section stay resident for
-  host-continuation concurrency. Static thunk and function-table tests pass.
-- [ ] Protect the hash-resolver section with concurrency-safe dispatch, matching
-  Fritter's native MSVC protection policy. The current XOR-on-entry dispatcher
-  can corrupt an executing section if another thread toggles it, so this
-  requires synchronized section entry and exit plus Windows stress coverage.
+  sections and the hash resolver are protected; `.text` stays resident. Static
+  thunk and function-table tests pass.
+- [x] Protect the hash-resolver section with synchronized entry and exit.
+  A per-section transition lock and active-call count keep code decrypted
+  until its final caller returns; static state tests and 4,096 emitted
+  dispatcher variants pass. Windows contention execution is tracked below.
 - [x] Vary N>1 dispatcher state registers, save order, inert instructions,
   and independent XOR-loop forms per output, matching Fritter's emitter axes.
 
@@ -115,6 +115,10 @@ stable codes. The underlying `ValidationError` remains available through
   Windows ANSI code page 1252 after the native loader rebuild.
 - [x] Re-run the full Windows payload, CLR v2, custom-bundle, and clipboard
   checks at the commit containing the rebuilt native loader images.
+- [ ] Execute the deterministic two-thread protected hash-resolver test on
+  Windows. Require observed active-call states 1, 2, 1, and 0, both native
+  thread results, and restored ciphertext. Re-run four randomized host-image
+  continuation loaders as full-loader stress at the same commit.
 - [x] Stress public generator reuse, concurrency, output uniqueness, and
   staged-request immutability.
 - [x] Repeat the generated Sliver session check after all loader changes and

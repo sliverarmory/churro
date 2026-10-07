@@ -420,21 +420,27 @@ public static extern uint GetACP();
         if ($LASTEXITCODE -ne 0 -or $HostRVA -notmatch '^[0-9]+$') {
             throw "query host continuation RVA failed: $HostRVA"
         }
-        $Label = "host-continuation"
-        $Loader = Join-Path $BuildPath "$Label.bin"
-        $env:CHURRO_E2E_PREFIX = Join-Path $BuildPath $Label
         $HostRVAHex = "0x{0:x}" -f [uint32]::Parse($HostRVA)
         $HostMarkers = @{
             ".continued" = "host thread continued"
             ".imports" = "relocations and imports"
         }
-        Clear-Markers $env:CHURRO_E2E_PREFIX $HostMarkers
-        Invoke-Checked "generate host continuation loader through public CLI" {
-            & $CliExe -input $ImportsDll -method RunImports -fork $HostRVAHex -output $Loader
+        # Fresh loaders and processes exercise the two concurrent hash
+        # resolver paths under several randomized dispatcher layouts.
+        # Scheduler overlap is probabilistic; the Windows dispatcher test
+        # checks an observed same-section overlap deterministically.
+        for ($Attempt = 1; $Attempt -le 4; $Attempt++) {
+            $Label = "host-continuation-$($Attempt.ToString('D2'))"
+            $Loader = Join-Path $BuildPath "$Label.bin"
+            $env:CHURRO_E2E_PREFIX = Join-Path $BuildPath $Label
+            Clear-Markers $env:CHURRO_E2E_PREFIX $HostMarkers
+            Invoke-Checked "generate $Label loader through public CLI" {
+                & $CliExe -input $ImportsDll -method RunImports -fork $HostRVAHex -output $Loader
+            }
+            & $ContinuationExe --loader $Loader
+            $RunnerExitCode = $LASTEXITCODE
+            Assert-Markers $Label $env:CHURRO_E2E_PREFIX $HostMarkers $RunnerExitCode
         }
-        & $ContinuationExe --loader $Loader
-        $RunnerExitCode = $LASTEXITCODE
-        Assert-Markers $Label $env:CHURRO_E2E_PREFIX $HostMarkers $RunnerExitCode
     }
     if ($script:Failures.Count -ne 0) {
         throw "$($script:Failures.Count) Windows E2E cases failed: $($script:Failures -join ' | ')"

@@ -94,6 +94,68 @@ func TestMultiSectionReferencesAndFunctionTable(t *testing.T) {
 	}
 }
 
+func TestHashSectionUsesSynchronizedDispatch(t *testing.T) {
+	meta, err := embeddedLoaderMetadata(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hashID := -1
+	for i, fn := range meta.Functions {
+		if fn.Name == ".hash_ch" {
+			hashID = i
+			if residentLoaderFunction(fn) {
+				t.Fatal("hash section must be protected")
+			}
+			break
+		}
+	}
+	if hashID < 0 {
+		t.Fatal("hash section missing")
+	}
+	incoming := 0
+	for _, ref := range meta.References {
+		if int(ref.TargetFn) == hashID {
+			incoming++
+		}
+	}
+	if incoming == 0 {
+		t.Fatal("hash section has no dispatched callers")
+	}
+	combined, err := prepareCombinedWithMetadata(assets.LoaderPEB1, assets.DispatchShim, meta, repeatByte(0xa5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := []byte{0xb1, 0x7a, 0x7e, 0xf1, 0xb1, 0x7a, 0x7e, 0xf1}
+	ft := bytes.Index(assets.DispatchShim, marker)
+	if ft < 0 {
+		t.Fatal("source shim function table marker missing")
+	}
+	entry := combined[ft+16+hashID*12 : ft+28+hashID*12]
+	if entry[8] == 0 || entry[9] != 0 || binary.LittleEndian.Uint16(entry[10:12]) != 0 {
+		t.Fatalf("hash section key/flags/state = %x", entry[8:12])
+	}
+	section := meta.Functions[hashID]
+	for j := uint32(0); j < section.Size; j++ {
+		at := section.Offset + j
+		if combined[4096+at]^entry[8] != assets.LoaderPEB1[at] {
+			t.Fatalf("hash section byte %d was not encrypted with its key", j)
+		}
+	}
+}
+
+func TestMultiSectionRejectsUnalignedTransitionState(t *testing.T) {
+	meta, err := embeddedLoaderMetadata(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Shift the marker one byte while keeping the sentinels and table intact.
+	shim := append([]byte{0x90}, assets.DispatchShim...)
+	_, err = prepareCombinedWithMetadata(assets.LoaderPEB1, shim, meta, repeatByte(0xa5))
+	if err == nil || !strings.Contains(err.Error(), "not 2-byte aligned") {
+		t.Fatalf("unaligned dispatcher state accepted: %v", err)
+	}
+}
+
 func TestMultiSectionRejectsMismatchedReferenceTarget(t *testing.T) {
 	meta, err := embeddedLoaderMetadata(false)
 	if err != nil {
@@ -167,7 +229,8 @@ func TestMultiSectionRejectsNonCallProtectedReferences(t *testing.T) {
 func TestNativeDispatcherRIPTargets(t *testing.T) {
 	const self, loader, table = uint32(12345), uint32(4096), uint32(931)
 	seen := make(map[string]bool)
-	for seed := int64(0); seed < 512; seed++ {
+	maxSize := 0
+	for seed := int64(0); seed < 2048; seed++ {
 		for _, swapped := range []bool{false, true} {
 			dispatcher, err := emitNativeDispatcher(self, loader, table, swapped, rand.New(rand.NewSource(seed)))
 			if err != nil {
@@ -175,6 +238,9 @@ func TestNativeDispatcherRIPTargets(t *testing.T) {
 			}
 			if len(dispatcher) == 0 || len(dispatcher) > dispatchSlotSize {
 				t.Fatalf("seed %d swapped %v: dispatcher has %d bytes", seed, swapped, len(dispatcher))
+			}
+			if len(dispatcher) > maxSize {
+				maxSize = len(dispatcher)
 			}
 			if dispatcher[len(dispatcher)-1] != 0xc3 ||
 				!bytes.Contains(dispatcher, []byte{0x48, 0x83, 0xec, 0x60}) ||
@@ -200,8 +266,72 @@ func TestNativeDispatcherRIPTargets(t *testing.T) {
 			seen[string(dispatcher)] = true
 		}
 	}
-	if len(seen) < 512 {
-		t.Fatalf("only %d distinct dispatchers across 1024 sampled outputs", len(seen))
+	if len(seen) < 2048 {
+		t.Fatalf("only %d distinct dispatchers across 4096 sampled outputs", len(seen))
+	}
+	t.Logf("largest synchronized dispatcher across 4096 outputs: %d/%d bytes", maxSize, dispatchSlotSize)
+}
+
+func TestNativeDispatcherSlotBoundExtremes(t *testing.T) {
+	for _, pattern := range []byte{0x00, 0x01, 0x07, 0x55, 0xaa, 0xff} {
+		for _, swapped := range []bool{false, true} {
+			code, err := emitNativeDispatcher(12345, 4096, 931, swapped, repeatByte(pattern))
+			if err != nil || len(code) > dispatchSlotSize {
+				t.Fatalf("pattern %02x swapped %v: size %d, error %v", pattern, swapped, len(code), err)
+			}
+		}
+	}
+}
+
+func TestNativeDispatcherTransitionStateEncoding(t *testing.T) {
+	for _, base := range []byte{12, 13, 14, 15} {
+		e := nativeDispatchEmitter{}
+		e.stateBit(base, false)
+		e.stateCompare(base, 0x8000)
+		e.stateCount(base, false)
+		e.stateCount(base, true)
+		e.stateBit(base, true)
+		if got := bytes.Count(e.code, []byte{0x66, 0xf0, 0x41, 0x0f, 0xba}); got != 2 {
+			t.Fatalf("r%d: expected atomic lock acquisition and release, got %d", base, got)
+		}
+		if !bytes.Contains(e.code, []byte{0x00, 0x80}) {
+			t.Fatalf("r%d: zero-count comparison must include the held lock bit", base)
+		}
+		if len(e.code) == 0 || e.code[len(e.code)-1] != 15 {
+			t.Fatalf("r%d: transition bit 15 encoding missing", base)
+		}
+	}
+}
+
+func TestNativeDispatcherXOROnlyAtZeroCount(t *testing.T) {
+	code, err := emitNativeDispatcher(12345, 4096, 931, false, repeatByte(0x02))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checks []int
+	for _, base := range []byte{12, 13, 14, 15} {
+		cmp := nativeDispatchEmitter{}
+		cmp.stateCompare(base, 0x8000)
+		for search := 0; search < len(code); {
+			at := bytes.Index(code[search:], cmp.code)
+			if at < 0 {
+				break
+			}
+			checks = append(checks, search+at+len(cmp.code))
+			search += at + len(cmp.code)
+		}
+	}
+	if len(checks) != 2 {
+		t.Fatalf("zero-count transition guards = %d, want two", len(checks))
+	}
+	for _, at := range checks {
+		if at+2 > len(code) || code[at] != 0x75 {
+			t.Fatalf("transition at %d does not skip XOR on nonzero count", at)
+		}
+		skip := at + 2 + int(int8(code[at+1]))
+		if skip <= at+2 || skip > len(code) || !bytes.Contains(code[at+2:skip], []byte{0x44, 0x30}) {
+			t.Fatalf("transition at %d does not guard an XOR loop", at)
+		}
 	}
 }
 

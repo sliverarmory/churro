@@ -111,10 +111,11 @@ build constants and code images.
 
 The checked-in MinGW loader has six code sections and a metadata table for
 cross-section calls. Churro's Go generator rewrites protected calls through
-dispatch thunks and encrypts four sections independently. The hash section
-stays resident because host continuation can call it from two threads. Each
-output varies its entry prefix, stack setup, decoder, trampoline, keys, and
-dispatch layout.
+dispatch thunks and encrypts five sections independently. A synchronized
+dispatcher keeps each section decrypted while calls are active, including
+concurrent calls into the hash resolver. The entry `.text` section stays
+resident. Each output varies its entry prefix, stack setup, decoder,
+trampoline, keys, and dispatch layout.
 The native bundle remains a separate build input, so build-level cipher/hash
 and API variations require a loader rebuild with `--rotate`.
 
