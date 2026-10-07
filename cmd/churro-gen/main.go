@@ -52,7 +52,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	headersName := flags.String("headers", "overwrite", "native PE headers: overwrite, preserve")
 	decoy := flags.String("decoy", "", "native PE decoy module path")
 	thread := flags.Bool("thread", false, "run a native executable entry point in a new thread")
-	arguments := flags.String("args", "", "native target arguments or native DLL export argument")
+	arguments := flags.String("args", "", "PE command-line arguments or native DLL export argument")
 	unicode := flags.Bool("unicode", false, "pass native DLL export argument as UTF-16")
 	fork := flags.String("fork", "", "host image continuation entry point RVA (hex)")
 	server := flags.String("server", "", "HTTP or HTTPS base URL for a staged payload")
@@ -375,12 +375,13 @@ func payloadForPath(path string, data []byte, options payloadOptions) (churro.Pa
 			return nil, errors.New("-unicode is only valid with a native DLL export")
 		}
 		if managed {
-			if options.thread || options.arguments != "" || options.decoy != "" || options.headers != churro.PEHeadersOverwrite {
+			if options.thread || options.decoy != "" || options.headers != churro.PEHeadersOverwrite {
 				return nil, errors.New("native PE flags are not valid with a managed executable")
 			}
 			return churro.DotNetExecutable{
-				Assembly: data,
-				Runtime:  churro.DotNetRuntime{Version: options.runtimeVersion, AppDomain: options.appDomain},
+				Assembly:  data,
+				Arguments: options.arguments,
+				Runtime:   churro.DotNetRuntime{Version: options.runtimeVersion, AppDomain: options.appDomain},
 			}, nil
 		}
 		if options.runtimeVersion != "" || options.appDomain != "" {
@@ -408,13 +409,13 @@ func payloadForPath(path string, data []byte, options payloadOptions) (churro.Pa
 			return nil, errors.New("-thread is only valid with a native executable")
 		}
 		if managed {
-			if options.arguments != "" || options.unicode || options.decoy != "" || options.headers != churro.PEHeadersOverwrite {
+			if options.unicode || options.decoy != "" || options.headers != churro.PEHeadersOverwrite {
 				return nil, errors.New("native PE flags are not valid with a managed DLL")
 			}
 			return churro.DotNetDLL{
 				Assembly: data,
 				EntryPoint: churro.DotNetStaticMethod{
-					TypeName: options.class, MethodName: options.method,
+					TypeName: options.class, MethodName: options.method, Arguments: options.arguments,
 				},
 				Runtime: churro.DotNetRuntime{Version: options.runtimeVersion, AppDomain: options.appDomain},
 			}, nil

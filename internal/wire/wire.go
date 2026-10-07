@@ -83,8 +83,8 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 	if config.ModuleType < ModuleDotNetDLL || config.ModuleType > ModuleJScript {
 		return nil, nil, "", fail(FailureInvalidConfiguration, "unsupported module type %d", config.ModuleType)
 	}
-	if config.Arguments != "" && config.ModuleType != ModuleNativeExecutable && config.ModuleType != ModuleNativeDLL {
-		return nil, nil, "", fail(FailureInvalidConfiguration, "target arguments are only supported for native PE payloads")
+	if config.Arguments != "" && config.ModuleType != ModuleNativeExecutable && config.ModuleType != ModuleNativeDLL && config.ModuleType != ModuleDotNetExecutable && config.ModuleType != ModuleDotNetDLL {
+		return nil, nil, "", fail(FailureInvalidConfiguration, "target arguments are only supported for PE payloads")
 	}
 	if config.ModuleType == ModuleNativeDLL && config.Arguments != "" && config.Method == "" {
 		return nil, nil, "", fail(FailureInvalidConfiguration, "native DLL arguments require an export")
@@ -188,7 +188,7 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 			}
 		}
 		copy(module[1036:1040], arg0)
-		if config.ModuleType == ModuleNativeExecutable && config.Arguments != "" {
+		if config.Arguments != "" {
 			module[1040] = ' '
 			copyCString(module[1041:1292], config.Arguments)
 		}

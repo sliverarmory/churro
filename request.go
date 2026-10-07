@@ -163,6 +163,10 @@ func normalizeGeneration(request Request) (normalizedGeneration, error) {
 	case DotNetExecutable:
 		normalized.payload = payload.Assembly
 		normalized.expectedType = moduleDotNetExecutable
+		if err := validateText("payload.arguments", payload.Arguments, maxArgumentsBytes); err != nil {
+			return normalized, err
+		}
+		normalized.args = payload.Arguments
 		normalized.runtime = payload.Runtime.Version
 		normalized.domain = payload.Runtime.AppDomain
 		if err := validateDotNetNames(normalized); err != nil {
@@ -173,6 +177,10 @@ func normalizeGeneration(request Request) (normalizedGeneration, error) {
 		normalized.expectedType = moduleDotNetDLL
 		normalized.class = payload.EntryPoint.TypeName
 		normalized.method = payload.EntryPoint.MethodName
+		if err := validateText("payload.entryPoint.arguments", payload.EntryPoint.Arguments, maxArgumentsBytes); err != nil {
+			return normalized, err
+		}
+		normalized.args = payload.EntryPoint.Arguments
 		normalized.runtime = payload.Runtime.Version
 		normalized.domain = payload.Runtime.AppDomain
 		if strings.TrimSpace(normalized.class) == "" {

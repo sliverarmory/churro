@@ -102,6 +102,47 @@ func TestNativeArgumentsValidation(t *testing.T) {
 	}
 }
 
+func TestManagedArgumentsValidation(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		payload func(string) Payload
+		field   string
+	}{
+		{
+			name: "executable",
+			payload: func(args string) Payload {
+				return DotNetExecutable{Assembly: []byte{1}, Arguments: args}
+			},
+			field: "payload.arguments",
+		},
+		{
+			name: "DLL method",
+			payload: func(args string) Payload {
+				return DotNetDLL{Assembly: []byte{1}, EntryPoint: DotNetStaticMethod{
+					TypeName: "Example.Entry", MethodName: "Run", Arguments: args,
+				}}
+			},
+			field: "payload.entryPoint.arguments",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, args := range []string{"", `one "two words"`, strings.Repeat("A", maxArgumentsBytes)} {
+				n, err := normalizeGeneration(Request{Payload: test.payload(args)})
+				if err != nil || n.args != args {
+					t.Fatalf("arguments %q normalized to %q, %v", args, n.args, err)
+				}
+			}
+			for _, args := range []string{strings.Repeat("A", maxArgumentsBytes+1), "A\x00B"} {
+				_, err := normalizeGeneration(Request{Payload: test.payload(args)})
+				var validation *ValidationError
+				if !errors.As(err, &validation) || validation.Field != test.field {
+					t.Fatalf("invalid arguments error = %v, want %s", err, test.field)
+				}
+			}
+		})
+	}
+}
+
 func TestGenerationErrorCodesFromPEInput(t *testing.T) {
 	tests := []struct {
 		name    string

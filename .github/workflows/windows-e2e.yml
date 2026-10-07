@@ -65,6 +65,49 @@ jobs:
         shell: pwsh
         run: ./scripts/test-windows-e2e.ps1 -LoaderBundleDirectory "$env:RUNNER_TEMP\churro-rotated-bundle"
 
+  clr-v2:
+    name: CLR v2 managed EXE and DLL
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Enable .NET Framework 3.5 and require CLR v2
+        shell: powershell
+        timeout-minutes: 12
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $feature = Get-WindowsFeature -Name NET-Framework-Core
+          if ($null -eq $feature) {
+            throw 'Windows feature NET-Framework-Core is unavailable on this runner'
+          }
+          if ($feature.InstallState -ne 'Installed') {
+            try {
+              $installed = Install-WindowsFeature -Name NET-Framework-Core -ErrorAction Stop
+            } catch {
+              throw "Could not install NET-Framework-Core from Windows Update or the runner component store: $_"
+            }
+            if (-not $installed.Success) {
+              throw "NET-Framework-Core installation failed: $($installed.ExitCode)"
+            }
+            if ($installed.RestartNeeded -eq 'Yes') {
+              throw 'NET-Framework-Core installation requires a restart, so CLR v2 cannot be tested on this runner'
+            }
+          }
+          $feature = Get-WindowsFeature -Name NET-Framework-Core
+          if ($feature.InstallState -ne 'Installed') {
+            throw "NET-Framework-Core is $($feature.InstallState), not Installed"
+          }
+      - name: Generate and execute CLR v2 managed payloads
+        shell: pwsh
+        timeout-minutes: 12
+        run: ./scripts/test-windows-clr-v2.ps1
+
   sliver-session:
     name: Generated Sliver DLL opens a session
     runs-on: windows-2022

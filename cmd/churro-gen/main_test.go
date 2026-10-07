@@ -154,6 +154,46 @@ func TestNativeArgumentFlagsMapToTypedPayload(t *testing.T) {
 	}
 }
 
+func TestManagedArgumentFlagsMapToTypedPayload(t *testing.T) {
+	args := `one "two words"`
+	exe, err := payloadForPath("payload.exe", cliSyntheticManagedPE(false), payloadOptions{arguments: args})
+	if err != nil {
+		t.Fatal(err)
+	}
+	managedEXE, ok := exe.(churro.DotNetExecutable)
+	if !ok || managedEXE.Arguments != args {
+		t.Fatalf("managed EXE payload = %#v", exe)
+	}
+	dll, err := payloadForPath("payload.dll", cliSyntheticManagedPE(true), payloadOptions{
+		class: "Example.Entry", method: "Run", arguments: args,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	managedDLL, ok := dll.(churro.DotNetDLL)
+	if !ok || managedDLL.EntryPoint.Arguments != args || managedDLL.EntryPoint.TypeName != "Example.Entry" || managedDLL.EntryPoint.MethodName != "Run" {
+		t.Fatalf("managed DLL payload = %#v", dll)
+	}
+	if _, err := payloadForPath("payload.dll", cliSyntheticManagedPE(true), payloadOptions{
+		class: "Example.Entry", method: "Run", arguments: args, unicode: true,
+	}); err == nil {
+		t.Fatal("managed DLL accepted native Unicode export flag")
+	}
+}
+
+func cliSyntheticManagedPE(dll bool) []byte {
+	image := cliSyntheticPE(dll)
+	fh := image[0x84:]
+	binary.LittleEndian.PutUint16(fh[0:], 0x14c)
+	binary.LittleEndian.PutUint16(fh[16:], 224)
+	opt := image[0x98:]
+	binary.LittleEndian.PutUint16(opt, 0x10b)
+	binary.LittleEndian.PutUint32(opt[92:], 16)
+	binary.LittleEndian.PutUint32(opt[96+14*8:], 0x1000)
+	copy(image[0x178:0x178+40], image[0x188:0x188+40])
+	return image
+}
+
 func cliSyntheticPE(dll bool) []byte {
 	image := make([]byte, 0x400)
 	copy(image, "MZ")

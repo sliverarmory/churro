@@ -193,6 +193,39 @@ func TestManagedPEModeAndRuntime(t *testing.T) {
 	}
 }
 
+func TestManagedArgumentsWireLayout(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		moduleType int
+		dll        bool
+	}{
+		{"executable", ModuleDotNetExecutable, false},
+		{"DLL", ModuleDotNetDLL, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			args := `one "two words"`
+			instance, _, _, err := Build(Config{
+				Payload: syntheticPE(test.dll, true, ""), ModuleType: test.moduleType,
+				Class: "Example.Entry", Method: "Run", Arguments: args, Entropy: 1,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mod := instance[instanceModOff:]
+			if got := cString(mod[1036:1292]); got != `AAAA one "two words"` {
+				t.Fatalf("managed command line = %q", got)
+			}
+			if got := u32(mod, 1292); got != 1 {
+				t.Fatalf("managed args_skip = %d", got)
+			}
+		})
+	}
+	_, _, _, err := Build(Config{Payload: []byte("WScript.Echo 1"), ModuleType: ModuleVBScript, Arguments: "one", Entropy: 1})
+	if err == nil || !strings.Contains(err.Error(), "only supported for PE") {
+		t.Fatalf("script arguments accepted: %v", err)
+	}
+}
+
 func syntheticPE(dll, managed bool, export string) []byte {
 	image := make([]byte, 0x600)
 	copy(image, "MZ")

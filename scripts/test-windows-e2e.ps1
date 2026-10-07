@@ -127,6 +127,71 @@ function Invoke-CLILoaderCase(
     Assert-Markers $Label $env:CHURRO_E2E_PREFIX $Markers $RunnerExitCode
 }
 
+function Invoke-ExitBehaviorCase([string]$Label, [string]$ExitMode) {
+    $Markers = @{ ".imports" = "relocations and imports" }
+    $Loader = Join-Path $BuildPath "$Label.bin"
+    $env:CHURRO_E2E_PREFIX = Join-Path $BuildPath $Label
+    Clear-Markers $env:CHURRO_E2E_PREFIX $Markers
+    Invoke-Checked "generate $Label" {
+        & $CliExe -input $ImportsDll -method RunImports -exit $ExitMode -output $Loader
+    }
+    if (-not (Test-Path $Loader -PathType Leaf) -or (Get-Item $Loader).Length -eq 0) {
+        throw "$Label returned an empty loader"
+    }
+
+    $StartInfo = [System.Diagnostics.ProcessStartInfo]::new($RunnerExe)
+    $StartInfo.UseShellExecute = $false
+    $StartInfo.CreateNoWindow = $true
+    $StartInfo.RedirectStandardOutput = $true
+    $StartInfo.RedirectStandardError = $true
+    foreach ($Argument in @("-input", $Loader, "-timeout", "2s")) {
+        [void]$StartInfo.ArgumentList.Add($Argument)
+    }
+    $ChildProcess = [System.Diagnostics.Process]::Start($StartInfo)
+    if (-not $ChildProcess) {
+        throw "$Label could not start the disposable shellcode runner"
+    }
+    try {
+        if (-not $ChildProcess.WaitForExit(10000)) {
+            throw "$Label runner exceeded the 10-second outer timeout"
+        }
+        $RunnerExitCode = $ChildProcess.ExitCode
+        $StandardOutput = $ChildProcess.StandardOutput.ReadToEnd()
+        $StandardError = $ChildProcess.StandardError.ReadToEnd()
+        Write-Host "$Label runner exit=$RunnerExitCode stdout='$($StandardOutput.Trim())' stderr='$($StandardError.Trim())'"
+        Assert-Markers $Label $env:CHURRO_E2E_PREFIX $Markers 0
+
+        if ($ExitMode -eq "process") {
+            if ($RunnerExitCode -ne 0 -or $StandardOutput.Contains("shellcode thread returned")) {
+                throw "$Label did not terminate the runner process directly"
+            }
+        }
+        elseif ($ExitMode -eq "block") {
+            if ($RunnerExitCode -ne 1 -or
+                -not $StandardError.Contains("shellcode thread did not return within 2s") -or
+                $StandardOutput.Contains("shellcode thread returned")) {
+                throw "$Label did not keep the shellcode thread blocked until the runner timeout"
+            }
+        }
+        else {
+            throw "unsupported exit-mode test: $ExitMode"
+        }
+    }
+    finally {
+        try {
+            if (-not $ChildProcess.HasExited) {
+                $ChildProcess.Kill($true)
+                if (-not $ChildProcess.WaitForExit(5000)) {
+                    throw "$Label runner could not be stopped"
+                }
+            }
+        }
+        finally {
+            $ChildProcess.Dispose()
+        }
+    }
+}
+
 Push-Location $Root
 try {
     $GenerateExe = Join-Path $BuildPath "generate.exe"
@@ -243,9 +308,19 @@ try {
             ".managed-exe" = "managed executable entry"
         }
     }
+    Invoke-TestCase "managed-executable-args" {
+        Invoke-CLILoaderCase -Label "managed-executable-args" -InputPath $ManagedExe -Options @("-args", '"quoted value" tail') -Markers @{
+            ".managed-exe-args" = "managed executable quoted arguments"
+        }
+    }
     Invoke-TestCase "managed-library" {
         Invoke-CLILoaderCase -Label "managed-library" -InputPath $ManagedDll -Options @("-class", "ChurroE2E", "-method", "Run") -Markers @{
             ".managed-dll" = "managed static method"
+        }
+    }
+    Invoke-TestCase "managed-library-args" {
+        Invoke-CLILoaderCase -Label "managed-library-args" -InputPath $ManagedDll -Options @("-class", "ChurroE2E", "-method", "RunArgs", "-args", '"quoted value" tail') -Markers @{
+            ".managed-dll-args" = "managed static method quoted arguments"
         }
     }
     Invoke-TestCase "vbscript" {
@@ -271,6 +346,22 @@ try {
         Invoke-CLILoaderCase -Label "native-aplib" -InputPath $ImportsDll -Options @("-method", "RunImports", "-compression", "aplib") -Markers @{
             ".imports" = "relocations and imports"
         }
+    }
+    Invoke-TestCase "native-entropy-none" {
+        Invoke-CLILoaderCase -Label "native-entropy-none" -InputPath $ImportsDll -Options @("-method", "RunImports", "-entropy", "none") -Markers @{
+            ".imports" = "relocations and imports"
+        }
+    }
+    Invoke-TestCase "native-entropy-names" {
+        Invoke-CLILoaderCase -Label "native-entropy-names" -InputPath $ImportsDll -Options @("-method", "RunImports", "-entropy", "names") -Markers @{
+            ".imports" = "relocations and imports"
+        }
+    }
+    Invoke-TestCase "exit-process" {
+        Invoke-ExitBehaviorCase "exit-process" "process"
+    }
+    Invoke-TestCase "exit-block" {
+        Invoke-ExitBehaviorCase "exit-block" "block"
     }
     Invoke-TestCase "custom-loader-bundle" {
         Invoke-CLILoaderCase -Label "custom-loader-bundle" -InputPath $ImportsDll -Options @(

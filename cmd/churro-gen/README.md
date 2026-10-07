@@ -1,11 +1,15 @@
 # churro-gen native loader bundles
 
 `churro-gen` accepts native `.exe` and `.dll`, managed `.exe` and `.dll`,
-`.vbs`, and `.js` inputs. `-args` supplies a raw command-line tail to a native
-executable. With a native DLL, `-method` selects an export and `-args` supplies
-its single string argument; `-unicode` passes that argument as UTF-16.
-`-fork` takes a hexadecimal host entry-point RVA for host continuation.
-Managed and script inputs do not accept `-args`.
+`.vbs`, and `.js` inputs. `-args` supplies a raw command-line tail to native
+and managed executables. The managed entry point receives parsed `string[]`
+arguments. With a managed DLL, `-class` and `-method` select a public static
+method, and `-args` is parsed into one string per method parameter. Quote
+arguments containing spaces according to Windows command-line rules. With a
+native DLL, `-method` selects an export and `-args` supplies its single string
+argument; `-unicode` passes that argument as UTF-16. `-args` is limited to
+250 bytes and is unavailable for scripts. `-fork` takes a hexadecimal host
+entry-point RVA for host continuation.
 
 Output formats are `bin`, `base64`, `c`, `ruby`, `python`, `powershell`,
 `csharp`, `hex`, and `uuid`, with Fritter-compatible numeric values 1 through

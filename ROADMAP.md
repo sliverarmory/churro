@@ -10,8 +10,9 @@ and execution evidence separately.
 
 Check an implementation item only after code and focused tests are committed.
 Check an execution item only after its named Windows Actions job passes at the
-same final commit. Keep unsupported or unverified behavior visible here. A
-release item requires a published artifact and independently verified hashes.
+implementation code commit. A later documentation-only evidence update does
+not invalidate that run. Keep unsupported or unverified behavior visible here.
+Publication requires a tagged release and independently verified hashes.
 
 ## Baseline
 
@@ -27,12 +28,14 @@ at `0cff53bd0733d353c642ba8cff346894a74a8552`.
 Implementation checkpoint: [draft PR #1](https://github.com/sliverarmory/churro/pull/1)
 on `feat/fritter-parity`. Local `go test ./...`, `go test -race ./...`,
 `go vet ./...`, all 11 cross-builds, and a byte-for-byte pinned loader
-rebuild passed. Windows execution remains pending for the final commit.
+rebuild passed. Windows execution evidence is recorded below.
 
 ## 1. Public API and CLI parity
 
 - [x] Add native invocation arguments and Unicode selection, with validation
-  and wire-format tests. Keep managed invocation parameterless.
+  and wire-format tests.
+- [x] Add managed EXE and DLL invocation arguments to the public Go API and CLI,
+  preserving parameterless calls and quoted argument parsing.
 - [x] Expose host-image continuation RVA in `churro-gen` and test the mapping to
   the Go request.
 - [x] Restore stable typed generation errors with documented codes and tests
@@ -61,18 +64,24 @@ rebuild passed. Windows execution remains pending for the final commit.
 
 ## 3. Windows runtime coverage
 
-- [ ] Execute native EXE payloads, including thread mode and process-exit
+- [x] Execute native EXE payloads, including thread mode and process-exit
   interception, in a bounded Windows test.
-- [ ] Execute managed EXE and DLL fixtures under CLR v4.
-- [ ] Execute VBScript and JScript fixtures and verify their observable result.
-- [ ] Execute HTTP and HTTPS staged modules, including Basic Authentication and
+- [x] Execute managed EXE and DLL fixtures under CLR v4.
+- [ ] Execute managed EXE and DLL argument fixtures under CLR v4, including a
+  quoted argument.
+- [ ] Execute managed EXE and DLL fixtures under CLR v2 on a runner with the
+  .NET Framework 3.5 Windows feature installed.
+- [x] Execute VBScript and JScript fixtures and verify their observable result.
+- [x] Execute HTTP and HTTPS staged modules, including Basic Authentication and
   module-name handling, against a local test server.
-- [ ] Exercise native header overwrite/preserve, decoy-module loading, and
+- [x] Exercise native header overwrite/preserve, decoy-module loading, and
   host-image continuation with explicit markers.
-- [ ] Execute a custom rotated loader bundle through the public CLI on Windows.
-- [ ] Execute multiple randomized entry/decoder forms and aPLib loaders on
+- [x] Execute a custom rotated loader bundle through the public CLI on Windows.
+- [x] Execute multiple randomized entry/decoder forms and aPLib loaders on
   Windows after the native dispatch change.
-- [ ] Stress public generator reuse, concurrency, output uniqueness, and
+- [ ] Execute `ExitProcess` and `ExitBlock` as bounded CLI cases with markers.
+- [ ] Execute native DLL loaders with `EntropyNone` and `EntropyNames`.
+- [x] Stress public generator reuse, concurrency, output uniqueness, and
   staged-request immutability.
 - [ ] Repeat the generated Sliver session check after all loader changes and
   require a matching `SessionOpenedEvent` plus `GetSessions` entry.
@@ -81,8 +90,9 @@ rebuild passed. Windows execution remains pending for the final commit.
 
 - [x] Implement the 11-target Go CLI release matrix with `CGO_ENABLED=0` and
   locally cross-build every target.
-- [ ] Build the Go CLI for Fritter's 11 host targets in CI with `CGO_ENABLED=0`.
-- [ ] Package versioned archives with README, LICENSE, and SHA-256 checksums.
+- [x] Build the Go CLI for Fritter's 11 host targets in CI with `CGO_ENABLED=0`.
+- [x] Package CI archives with README, LICENSE, linked documentation, commit
+  sidecars, and SHA-256 checksums; all 11 were independently checked.
 - [ ] Publish and verify a tagged GitHub release from the final tested commit.
 
 ## Completion evidence

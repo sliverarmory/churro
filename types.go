@@ -111,11 +111,12 @@ const (
 	DotNetRuntimeV4 = "v4.0.30319"
 )
 
-// DotNetExecutable describes a managed Windows executable assembly. Its entry
-// point is invoked without caller-supplied arguments.
+// DotNetExecutable describes a managed Windows executable assembly. Arguments
+// is a raw command-line tail parsed into the entry point's string array.
 type DotNetExecutable struct {
-	Assembly []byte
-	Runtime  DotNetRuntime
+	Assembly  []byte
+	Arguments string
+	Runtime   DotNetRuntime
 }
 
 func (DotNetExecutable) churroPayload() {}
@@ -129,10 +130,12 @@ type DotNetDLL struct {
 
 func (DotNetDLL) churroPayload() {}
 
-// DotNetStaticMethod identifies a parameterless public static method.
+// DotNetStaticMethod identifies a public static method. Arguments is a raw
+// command-line tail parsed into one string argument per method parameter.
 type DotNetStaticMethod struct {
 	TypeName   string
 	MethodName string
+	Arguments  string
 }
 
 // VBScript describes VBScript source encoded for the target Windows

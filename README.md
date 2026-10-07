@@ -39,13 +39,15 @@ is not used in the tested rebuild path. Normal Go builds need neither compiler.
 The generated CLI accepts Windows x64 `.exe` and `.dll` images, plus `.vbs`
 and `.js` source. Native and managed PE inputs are selected from the PE
 headers. A native DLL's `DllMain` runs, followed by the named export when
-`-method` is set. Native EXE and DLL entry arguments can be supplied with
-`-args`; `-unicode` selects a wide-character DLL export argument.
+`-method` is set. `-args` supplies a raw command-line tail for native and
+managed executables and managed DLL methods. A native DLL export receives its
+single argument string; `-unicode` selects a wide-character export argument.
 
 ```sh
 ./churro-gen -input payload.dll -method StartW -output payload.bin
 ./churro-gen -input payload.exe -output executable.bin
-./churro-gen -input assembly.dll -class Example.Entry -method Run -output managed.bin
+./churro-gen -input assembly.dll -class Example.Entry -method Run \
+    -args 'one "two words"' -output managed.bin
 ```
 
 On Windows, use `churro-gen.exe`. Use `-format` to select `bin` (the default),
@@ -91,7 +93,11 @@ _ = loader
 The package also has typed `NativeExecutable`, `DotNetExecutable`,
 `DotNetDLL`, `VBScript`, and `JScript` requests. Native EXEs accept an argument
 tail, and named native DLL exports accept an argument string with an optional
-Unicode selection. Managed DLL methods remain parameterless. `Format` controls
+Unicode selection. `DotNetExecutable.Arguments` supplies a raw command-line
+tail parsed into the entry point's `string[]`. For managed DLLs,
+`DotNetStaticMethod.Arguments` is parsed into positional string parameters;
+leave it empty for a parameterless method. Arguments are limited to 250 bytes
+and cannot contain NUL. `Format` controls
 the representation of `Result.Loader`; `FormatBinary` is the zero-value
 default. `NewWithLoader` accepts a validated native loader bundle for custom
 build constants and code images.
