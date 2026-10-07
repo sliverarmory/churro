@@ -39,8 +39,59 @@ func TestEmbeddedScriptLayout(t *testing.T) {
 	if u64(instance, 48) != Maru("LoadLibraryA", 0, DefaultPoly)^Maru("kernel32.dll", 0, DefaultPoly) {
 		t.Fatal("API hash slot 0 does not match the pinned API")
 	}
+	if got := cString(instance[576:832]); got != defaultDLLNames {
+		t.Fatalf("default DLL preload list changed: %q", got)
+	}
 	if string(instance[1380:1391]) != "wscript.exe" {
 		t.Fatal("script host strings missing")
+	}
+}
+
+func TestCustomAPIImportWireLayoutAndPreload(t *testing.T) {
+	imports := append([]APIImport(nil), DefaultAPIImports...)
+	imports = append(imports, APIImport{Module: "advapi32.dll", Name: "GetUserNameA"})
+	instance, _, _, err := Build(Config{
+		Payload: []byte("WScript.Echo 1"), ModuleType: ModuleVBScript,
+		Entropy: 1, APIImports: imports,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u32(instance, 572); got != 62 {
+		t.Fatalf("API count = %d, want 62", got)
+	}
+	if got := u64(instance, 48+61*8); got != Maru("GetUserNameA", 0, DefaultPoly)^Maru("advapi32.dll", 0, DefaultPoly) {
+		t.Fatalf("custom API hash = %016x", got)
+	}
+	if got := cString(instance[576:832]); got != defaultDLLNames+";advapi32.dll" {
+		t.Fatalf("DLL preload list = %q", got)
+	}
+	if instance[576+len(defaultDLLNames)+len(";advapi32.dll")+1] != 0 {
+		t.Fatal("DLL preload list lacks a second NUL terminator")
+	}
+	imports[0].Module = "ntdll.dll"
+	if _, _, _, err := Build(Config{Payload: []byte("WScript.Echo 1"), ModuleType: ModuleVBScript, APIImports: imports}); err == nil || !strings.Contains(err.Error(), "slot 0") {
+		t.Fatalf("wrong LoadLibraryA module result = %v", err)
+	}
+}
+
+func TestCustomAPIImportPreloadBounds(t *testing.T) {
+	imports := []APIImport{{Module: "kernel32.dll", Name: "LoadLibraryA"}}
+	for i := 0; i < 4; i++ {
+		module := strings.Repeat(string(rune('a'+i)), 59) + ".dll"
+		imports = append(imports, APIImport{Module: module, Name: "Export"})
+	}
+	if _, err := DLLNamesForAPIImports(imports); err == nil || !strings.Contains(err.Error(), "254 bytes") {
+		t.Fatalf("oversize preload list result = %v", err)
+	}
+	imports = imports[:1]
+	imports = append(imports, APIImport{Module: "Advapi32.dll", Name: "GetUserNameA"})
+	if _, err := DLLNamesForAPIImports(imports); err == nil || !strings.Contains(err.Error(), "invalid DLL name") {
+		t.Fatalf("mixed-case DLL name result = %v", err)
+	}
+	imports[1].Module = "my_module.dll"
+	if _, err := DLLNamesForAPIImports(imports); err == nil || !strings.Contains(err.Error(), "invalid DLL name") {
+		t.Fatalf("underscore DLL name result = %v", err)
 	}
 }
 
@@ -101,6 +152,73 @@ func TestNativeDLLExportValidation(t *testing.T) {
 	}
 }
 
+func TestNativeArgumentsAndUnicodeWireLayout(t *testing.T) {
+	dll := syntheticPE(true, false, "HelloWorld")
+	instance, _, _, err := Build(Config{
+		Payload: dll, ModuleType: ModuleNativeDLL, Method: "HelloWorld",
+		Arguments: "hello world", Unicode: true, Entropy: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mod := instance[instanceModOff:]
+	if got := cString(mod[1036:1292]); got != "hello world" {
+		t.Fatalf("DLL argument = %q", got)
+	}
+	if got := u32(mod, 1296); got != 1 {
+		t.Fatalf("DLL Unicode flag = %d", got)
+	}
+	_, _, _, err = Build(Config{Payload: dll, ModuleType: ModuleNativeDLL, Arguments: "hello", Entropy: 1})
+	if err == nil || !strings.Contains(err.Error(), "require an export") {
+		t.Fatalf("DLL arguments without export: %v", err)
+	}
+
+	exe := syntheticPE(false, false, "")
+	instance, _, _, err = Build(Config{
+		Payload: exe, ModuleType: ModuleNativeExecutable,
+		Arguments: `one "two words"`, Entropy: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mod = instance[instanceModOff:]
+	if got := cString(mod[1036:1292]); got != `AAAA one "two words"` {
+		t.Fatalf("EXE command line = %q", got)
+	}
+	if got := u32(mod, 1296); got != 0 {
+		t.Fatalf("EXE Unicode flag = %d", got)
+	}
+	_, _, _, err = Build(Config{Payload: exe, ModuleType: ModuleNativeExecutable, Unicode: true, Entropy: 1})
+	if err == nil || !strings.Contains(err.Error(), "native DLL") {
+		t.Fatalf("Unicode flag on EXE: %v", err)
+	}
+}
+
+func TestAPLibModuleHeaderAndPayload(t *testing.T) {
+	payload := bytes.Repeat([]byte("ABCDABCDABCD"), 128)
+	instance, _, _, err := Build(Config{
+		Payload: payload, ModuleType: ModuleJScript,
+		Compression: 2, Entropy: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mod := instance[instanceModOff:]
+	if got := u32(mod, 8); got != 2 {
+		t.Fatalf("module compression = %d", got)
+	}
+	if got := u32(mod, 1324); got != uint32(len(payload)) {
+		t.Fatalf("module uncompressed length = %d", got)
+	}
+	zlen := int(u32(mod, 1320))
+	if zlen == 0 || zlen >= len(payload) {
+		t.Fatalf("compressed payload length = %d", zlen)
+	}
+	if _, err := referenceDepack(mod[moduleDataOffset:moduleDataOffset+zlen], payload); err != nil {
+		t.Fatalf("packed module does not round-trip: %v", err)
+	}
+}
+
 func TestManagedPEModeAndRuntime(t *testing.T) {
 	image := syntheticPE(false, true, "")
 	instance, _, _, err := Build(Config{Payload: image, ModuleType: ModuleDotNetExecutable, Entropy: 1})
@@ -123,6 +241,39 @@ func TestManagedPEModeAndRuntime(t *testing.T) {
 	_, _, _, err = Build(Config{Payload: image, ModuleType: ModuleDotNetExecutable, Entropy: 1})
 	if err == nil || !strings.Contains(err.Error(), "mixed") {
 		t.Fatalf("mixed assembly error = %v", err)
+	}
+}
+
+func TestManagedArgumentsWireLayout(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		moduleType int
+		dll        bool
+	}{
+		{"executable", ModuleDotNetExecutable, false},
+		{"DLL", ModuleDotNetDLL, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			args := `one "two words"`
+			instance, _, _, err := Build(Config{
+				Payload: syntheticPE(test.dll, true, ""), ModuleType: test.moduleType,
+				Class: "Example.Entry", Method: "Run", Arguments: args, Entropy: 1,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			mod := instance[instanceModOff:]
+			if got := cString(mod[1036:1292]); got != `AAAA one "two words"` {
+				t.Fatalf("managed command line = %q", got)
+			}
+			if got := u32(mod, 1292); got != 1 {
+				t.Fatalf("managed args_skip = %d", got)
+			}
+		})
+	}
+	_, _, _, err := Build(Config{Payload: []byte("WScript.Echo 1"), ModuleType: ModuleVBScript, Arguments: "one", Entropy: 1})
+	if err == nil || !strings.Contains(err.Error(), "only supported for PE") {
+		t.Fatalf("script arguments accepted: %v", err)
 	}
 }
 

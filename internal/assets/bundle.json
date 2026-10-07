@@ -1,0 +1,1220 @@
+{
+  "schema": 1,
+  "poly": {
+    "cipher_rotations": [
+      4,
+      4,
+      16,
+      23,
+      22,
+      11
+    ],
+    "cipher_rounds": 20,
+    "hash_rot_a": 3,
+    "hash_rot_b": 13,
+    "hash_rounds": 27
+  },
+  "api_imports": [
+    {
+      "module": "kernel32.dll",
+      "name": "LoadLibraryA"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "GetModuleHandleA"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "GetFileSizeEx"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "MultiByteToWideChar"
+    },
+    {
+      "module": "ntdll.dll",
+      "name": "NtContinue"
+    },
+    {
+      "module": "wininet.dll",
+      "name": "InternetReadFile"
+    },
+    {
+      "module": "ole32.dll",
+      "name": "CoCreateInstance"
+    },
+    {
+      "module": "ntdll.dll",
+      "name": "NtUnmapViewOfSection"
+    },
+    {
+      "module": "oleaut32.dll",
+      "name": "SysAllocString"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "GetCommandLineA"
+    },
+    {
+      "module": "wininet.dll",
+      "name": "InternetOpenA"
+    },
+    {
+      "module": "ntdll.dll",
+      "name": "RtlCreateUnicodeString"
+    },
+    {
+      "module": "wininet.dll",
+      "name": "HttpSendRequestA"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "VirtualProtect"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "GetCommandLineW"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "VirtualAlloc"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "VirtualQuery"
+    },
+    {
+      "module": "ntdll.dll",
+      "name": "RtlInitUnicodeString"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "GetCurrentThread"
+    },
+    {
+      "module": "wininet.dll",
+      "name": "InternetSetOptionA"
+    },
+    {
+      "module": "ole32.dll",
+      "name": "CoUninitialize"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "HeapReAlloc"
+    },
+    {
+      "module": "oleaut32.dll",
+      "name": "SysFreeString"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "CreateFileA"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "GetProcAddress"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "Sleep"
+    },
+    {
+      "module": "ntdll.dll",
+      "name": "RtlExitUserThread"
+    },
+    {
+      "module": "oleaut32.dll",
+      "name": "SafeArrayGetUBound"
+    },
+    {
+      "module": "wininet.dll",
+      "name": "InternetQueryDataAvailable"
+    },
+    {
+      "module": "ntdll.dll",
+      "name": "RtlExitUserProcess"
+    },
+    {
+      "module": "wininet.dll",
+      "name": "InternetCrackUrlA"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "HeapAlloc"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "GetLastError"
+    },
+    {
+      "module": "ntdll.dll",
+      "name": "RtlEqualUnicodeString"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "GetThreadContext"
+    },
+    {
+      "module": "ntdll.dll",
+      "name": "NtCreateSection"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "HeapFree"
+    },
+    {
+      "module": "oleaut32.dll",
+      "name": "SafeArrayDestroy"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "GetProcessHeap"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "WaitForSingleObject"
+    },
+    {
+      "module": "mscoree.dll",
+      "name": "CorBindToRuntime"
+    },
+    {
+      "module": "wininet.dll",
+      "name": "InternetCloseHandle"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "CreateThread"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "GetCurrentProcess"
+    },
+    {
+      "module": "ntdll.dll",
+      "name": "RtlUnicodeStringToAnsiString"
+    },
+    {
+      "module": "oleaut32.dll",
+      "name": "SafeArrayGetLBound"
+    },
+    {
+      "module": "oleaut32.dll",
+      "name": "SafeArrayPutElement"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "GetUserDefaultLCID"
+    },
+    {
+      "module": "wininet.dll",
+      "name": "HttpQueryInfoA"
+    },
+    {
+      "module": "oleaut32.dll",
+      "name": "LoadTypeLib"
+    },
+    {
+      "module": "wininet.dll",
+      "name": "InternetConnectA"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "VirtualFree"
+    },
+    {
+      "module": "oleaut32.dll",
+      "name": "SafeArrayCreateVector"
+    },
+    {
+      "module": "ntdll.dll",
+      "name": "RtlEqualString"
+    },
+    {
+      "module": "mscoree.dll",
+      "name": "CLRCreateInstance"
+    },
+    {
+      "module": "oleaut32.dll",
+      "name": "SafeArrayCreate"
+    },
+    {
+      "module": "kernel32.dll",
+      "name": "CloseHandle"
+    },
+    {
+      "module": "ntdll.dll",
+      "name": "NtMapViewOfSection"
+    },
+    {
+      "module": "wininet.dll",
+      "name": "HttpOpenRequestA"
+    },
+    {
+      "module": "shell32.dll",
+      "name": "CommandLineToArgvW"
+    },
+    {
+      "module": "ole32.dll",
+      "name": "CoInitializeEx"
+    }
+  ],
+  "peb1_metadata": {
+    "functions": [
+      {
+        "offset": 0,
+        "size": 11520,
+        "single_page": false,
+        "name": ".text"
+      },
+      {
+        "offset": 12288,
+        "size": 980,
+        "single_page": true,
+        "name": ".main_pr"
+      },
+      {
+        "offset": 11520,
+        "size": 60,
+        "single_page": true,
+        "name": ".ansi2un"
+      },
+      {
+        "offset": 13268,
+        "size": 1984,
+        "single_page": true,
+        "name": ".hash_ch"
+      },
+      {
+        "offset": 11580,
+        "size": 504,
+        "single_page": true,
+        "name": ".aP_depa"
+      },
+      {
+        "offset": 15252,
+        "size": 384,
+        "single_page": true,
+        "name": ".cipher"
+      }
+    ],
+    "references": [
+      {
+        "src_blob_off": 41,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 108,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 127,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 300,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 317,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 335,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 417,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 1
+      },
+      {
+        "src_blob_off": 450,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 1
+      },
+      {
+        "src_blob_off": 1210,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 5
+      },
+      {
+        "src_blob_off": 1226,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 2324,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 2507,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 3110,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 3165,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 3206,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 3371,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 5304,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 5327,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 5421,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 5551,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 5604,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 5636,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 6850,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 6883,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 7081,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 7975,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 8762,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 10313,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 12317,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 12339,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 12361,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 12432,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 12456,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 12481,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 12562,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 5
+      },
+      {
+        "src_blob_off": 12578,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 12618,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 12749,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 12812,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 12969,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 13054,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 13073,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 4
+      },
+      {
+        "src_blob_off": 13092,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 13116,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 13136,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 13160,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 13173,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 13211,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 13866,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 3,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 14176,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 3,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 15054,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 3,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 15169,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 3,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11678,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11690,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11702,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11760,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11811,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11840,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11873,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11887,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11967,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 12023,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      }
+    ]
+  },
+  "peb2_metadata": {
+    "functions": [
+      {
+        "offset": 0,
+        "size": 11520,
+        "single_page": false,
+        "name": ".text"
+      },
+      {
+        "offset": 12288,
+        "size": 980,
+        "single_page": true,
+        "name": ".main_pr"
+      },
+      {
+        "offset": 11520,
+        "size": 60,
+        "single_page": true,
+        "name": ".ansi2un"
+      },
+      {
+        "offset": 13268,
+        "size": 1984,
+        "single_page": true,
+        "name": ".hash_ch"
+      },
+      {
+        "offset": 11580,
+        "size": 504,
+        "single_page": true,
+        "name": ".aP_depa"
+      },
+      {
+        "offset": 15252,
+        "size": 384,
+        "single_page": true,
+        "name": ".cipher"
+      }
+    ],
+    "references": [
+      {
+        "src_blob_off": 41,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 108,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 127,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 300,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 317,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 335,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 417,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 1
+      },
+      {
+        "src_blob_off": 450,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 1
+      },
+      {
+        "src_blob_off": 1210,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 5
+      },
+      {
+        "src_blob_off": 1226,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 2324,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 2507,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 3110,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 3165,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 3206,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 3371,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 5304,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 5327,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 5421,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 5551,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 5604,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 5636,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 6850,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 6883,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 7081,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 7975,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 8762,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 10313,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 0,
+        "target_fn": 2
+      },
+      {
+        "src_blob_off": 12317,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 12339,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 12361,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 12432,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 12456,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 12481,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 12562,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 5
+      },
+      {
+        "src_blob_off": 12578,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 12618,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 12749,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 3
+      },
+      {
+        "src_blob_off": 12812,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 12969,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 13054,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 13073,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 4
+      },
+      {
+        "src_blob_off": 13092,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 13116,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 13136,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 13160,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 13173,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 13211,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 1,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 13866,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 3,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 14176,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 3,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 15054,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 3,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 15169,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 3,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11678,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11690,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11702,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11760,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11811,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11840,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11873,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11887,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 11967,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      },
+      {
+        "src_blob_off": 12023,
+        "inst_length": 5,
+        "disp_offset": 1,
+        "src_fn": 4,
+        "target_fn": 0
+      }
+    ]
+  },
+  "sha256": {
+    "peb1": "2ea072d6b079d9ab085cb3c543fe694704b44f6747f84479e3cadf87c0d2e56b",
+    "peb2": "b353548705a467d7bfe7212e793785f9e29738705a812d4376b7e6326b77efc6",
+    "dispatch_shim": "bf541d84ae3e486b14491b21c56af0754cde25bd18041964608a1e6688c6f33d"
+  }
+}

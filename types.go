@@ -17,6 +17,7 @@ type Request struct {
 type LoaderConfig struct {
 	Exit             ExitBehavior
 	Entropy          Entropy
+	Compression      Compression
 	HostContinuation *HostImageContinuation
 }
 
@@ -58,9 +59,10 @@ const (
 
 // NativeExecutable describes an unmanaged Windows executable image.
 type NativeExecutable struct {
-	Image []byte
-	Flags NativeExecutableFlags
-	PE    NativePEConfig
+	Image     []byte
+	Arguments string
+	Flags     NativeExecutableFlags
+	PE        NativePEConfig
 }
 
 func (NativeExecutable) churroPayload() {}
@@ -77,8 +79,7 @@ const (
 const nativeExecutableFlagsMask = NativeExecutableRunInThread
 
 // NativeDLL describes an unmanaged Windows DLL image. DllMain is always
-// invoked. Export optionally selects one parameterless export to invoke after
-// DllMain returns.
+// invoked. Export optionally selects a named export to invoke afterward.
 type NativeDLL struct {
 	Image  []byte
 	Export *NativeDLLExport
@@ -87,9 +88,15 @@ type NativeDLL struct {
 
 func (NativeDLL) churroPayload() {}
 
-// NativeDLLExport identifies a parameterless native DLL export.
+// NativeDLLExport identifies a native DLL export. When Arguments is empty,
+// the export is called without a parameter. Otherwise the loader passes one
+// pointer to the argument string. The loader converts UTF-8 caller text to
+// the target process's ANSI code page by default, or passes UTF-16 when
+// Unicode is true.
 type NativeDLLExport struct {
-	Name string
+	Name      string
+	Arguments string
+	Unicode   bool
 }
 
 // DotNetRuntime configures managed payload hosting. Empty fields use the
@@ -106,11 +113,12 @@ const (
 	DotNetRuntimeV4 = "v4.0.30319"
 )
 
-// DotNetExecutable describes a managed Windows executable assembly. Its entry
-// point is invoked without caller-supplied arguments.
+// DotNetExecutable describes a managed Windows executable assembly. Arguments
+// is a raw command-line tail parsed into the entry point's string array.
 type DotNetExecutable struct {
-	Assembly []byte
-	Runtime  DotNetRuntime
+	Assembly  []byte
+	Arguments string
+	Runtime   DotNetRuntime
 }
 
 func (DotNetExecutable) churroPayload() {}
@@ -124,10 +132,12 @@ type DotNetDLL struct {
 
 func (DotNetDLL) churroPayload() {}
 
-// DotNetStaticMethod identifies a parameterless public static method.
+// DotNetStaticMethod identifies a public static method. Arguments is a raw
+// command-line tail parsed into one string argument per method parameter.
 type DotNetStaticMethod struct {
 	TypeName   string
 	MethodName string
+	Arguments  string
 }
 
 // VBScript describes VBScript source encoded for the target Windows
@@ -207,4 +217,14 @@ const (
 	EntropyNames
 	// EntropyNone disables optional name and cryptographic randomization.
 	EntropyNone
+)
+
+// Compression selects the payload module encoding before optional encryption.
+type Compression uint8
+
+const (
+	// CompressionNone leaves the payload bytes unchanged and is the default.
+	CompressionNone Compression = iota
+	// CompressionAPLib uses the loader's aPLib decoder.
+	CompressionAPLib
 )

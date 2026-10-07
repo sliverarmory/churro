@@ -1,8 +1,10 @@
 package wire
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -26,34 +28,52 @@ const (
 // Config describes one typed Fritter payload in the native loader's wire
 // format. Entropy, Exit, and Headers use the C engine's 1-based constants.
 type Config struct {
-	Payload    []byte
-	ModuleType int
-	Runtime    string
-	Domain     string
-	Class      string
-	Method     string
-	Entropy    int
-	Exit       int
-	Headers    int
-	Thread     bool
-	OEP        uint32
-	Decoy      string
-	StagingURL string
-	ModuleName string
-	UTF8       bool
-	Poly       Poly
-	APIImports []APIImport
+	Payload     []byte
+	ModuleType  int
+	Runtime     string
+	Domain      string
+	Class       string
+	Method      string
+	Arguments   string
+	Unicode     bool
+	Entropy     int
+	Exit        int
+	Compression int
+	Headers     int
+	Thread      bool
+	OEP         uint32
+	Decoy       string
+	StagingURL  string
+	ModuleName  string
+	UTF8        bool
+	Poly        Poly
+	APIImports  []APIImport
 }
 
 // Build serializes FRITTER_MODULE and FRITTER_INSTANCE, returning a staged
 // module separately when StagingURL is set. It does not read or write files.
 // The caller owns the returned byte slices.
 func Build(config Config) (instance []byte, staged []byte, moduleName string, err error) {
+	return BuildContext(context.Background(), config)
+}
+
+// BuildContext is Build with cancellation checkpoints during compression and
+// encryption. A canceled build returns no partial instance or staged module.
+func BuildContext(ctx context.Context, config Config) (instance []byte, staged []byte, moduleName string, err error) {
+	defer func() {
+		var failure *Failure
+		if err != nil && !errors.As(err, &failure) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			err = &Failure{Kind: FailureRandom, Err: err}
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return nil, nil, "", err
+	}
 	if len(config.Payload) == 0 {
-		return nil, nil, "", fmt.Errorf("payload is empty")
+		return nil, nil, "", fail(FailureFileEmpty, "payload is empty")
 	}
 	if len(config.Payload) > math.MaxInt32-2*moduleSize {
-		return nil, nil, "", fmt.Errorf("payload exceeds wire format size limit")
+		return nil, nil, "", fail(FailureFileInvalid, "payload exceeds wire format size limit")
 	}
 	if config.Entropy == 0 {
 		config.Entropy = 3
@@ -64,11 +84,23 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 	if config.Headers == 0 {
 		config.Headers = 1
 	}
-	if config.Entropy < 1 || config.Entropy > 3 || config.Exit < 1 || config.Exit > 3 || config.Headers < 1 || config.Headers > 2 {
-		return nil, nil, "", fmt.Errorf("invalid entropy, exit, or headers option")
+	if config.Compression == 0 {
+		config.Compression = 1
+	}
+	if config.Entropy < 1 || config.Entropy > 3 || config.Exit < 1 || config.Exit > 3 || config.Headers < 1 || config.Headers > 2 || config.Compression < 1 || config.Compression > 2 {
+		return nil, nil, "", fail(FailureInvalidConfiguration, "invalid entropy, exit, headers, or compression option")
 	}
 	if config.ModuleType < ModuleDotNetDLL || config.ModuleType > ModuleJScript {
-		return nil, nil, "", fmt.Errorf("unsupported module type %d", config.ModuleType)
+		return nil, nil, "", fail(FailureInvalidConfiguration, "unsupported module type %d", config.ModuleType)
+	}
+	if config.Arguments != "" && config.ModuleType != ModuleNativeExecutable && config.ModuleType != ModuleNativeDLL && config.ModuleType != ModuleDotNetExecutable && config.ModuleType != ModuleDotNetDLL {
+		return nil, nil, "", fail(FailureInvalidConfiguration, "target arguments are only supported for PE payloads")
+	}
+	if config.ModuleType == ModuleNativeDLL && config.Arguments != "" && config.Method == "" {
+		return nil, nil, "", fail(FailureInvalidConfiguration, "native DLL arguments require an export")
+	}
+	if config.Unicode && (config.ModuleType != ModuleNativeDLL || config.Method == "") {
+		return nil, nil, "", fail(FailureInvalidConfiguration, "Unicode export arguments require a native DLL export")
 	}
 	if config.ModuleType <= ModuleNativeExecutable {
 		info, peErr := inspectPE(config.Payload, config.Method)
@@ -76,32 +108,47 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 			return nil, nil, "", peErr
 		}
 		if info.moduleType != config.ModuleType {
-			return nil, nil, "", fmt.Errorf("PE payload is module type %d, expected %d", info.moduleType, config.ModuleType)
+			return nil, nil, "", fail(FailurePayloadTypeMismatch, "PE payload is module type %d, expected %d", info.moduleType, config.ModuleType)
 		}
 		if config.Runtime == "" {
 			config.Runtime = info.runtime
 		}
 	}
+	if config.ModuleType == ModuleDotNetDLL && (config.Class == "" || config.Method == "") {
+		return nil, nil, "", fail(FailureDotNetEntryPoint, "managed DLL requires class and method")
+	}
 	if err := validateConfigText(config); err != nil {
-		return nil, nil, "", err
+		return nil, nil, "", &Failure{Kind: FailureInvalidConfiguration, Err: err}
 	}
 	poly := config.Poly.normalized()
 	if poly.CipherRounds == 0 || poly.HashRounds == 0 {
-		return nil, nil, "", fmt.Errorf("invalid polymorphism constants")
+		return nil, nil, "", fail(FailureInvalidConfiguration, "invalid polymorphism constants")
 	}
 	imports := config.APIImports
 	if imports == nil {
 		imports = DefaultAPIImports
 	}
-	if len(imports) == 0 || len(imports) > 64 || imports[0].Name != "LoadLibraryA" {
-		return nil, nil, "", fmt.Errorf("API import list must have 1..64 entries with LoadLibraryA first")
-	}
-	for _, imp := range imports {
-		if imp.Module == "" || imp.Name == "" {
-			return nil, nil, "", fmt.Errorf("API import contains an empty DLL or export name")
-		}
+	dllNames, err := DLLNamesForAPIImports(imports)
+	if err != nil {
+		return nil, nil, "", &Failure{Kind: FailureInvalidConfiguration, Err: err}
 	}
 
+	moduleData := config.Payload
+	if config.Compression == 2 {
+		moduleData, err = packAPLibContext(ctx, config.Payload)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, "", ctx.Err()
+			}
+			return nil, nil, "", &Failure{Kind: FailureCompression, Err: err}
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, "", err
+	}
+	if len(moduleData) > math.MaxInt32-2*moduleSize {
+		return nil, nil, "", fail(FailureFileInvalid, "compressed payload exceeds wire format size limit")
+	}
 	var modPadByte, instPadByte [1]byte
 	if _, err := rand.Read(modPadByte[:]); err != nil {
 		return nil, nil, "", fmt.Errorf("module padding entropy: %w", err)
@@ -109,17 +156,20 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 	if _, err := rand.Read(instPadByte[:]); err != nil {
 		return nil, nil, "", fmt.Errorf("instance padding entropy: %w", err)
 	}
-	modLen := moduleSize + len(config.Payload) + int(modPadByte[0])
+	modLen := moduleSize + len(moduleData) + int(modPadByte[0])
 	module := make([]byte, modLen)
 	put32(module, 0, uint32(config.ModuleType))
 	if config.Thread {
 		put32(module, 4, 1)
 	}
-	put32(module, 8, 1) // FRITTER_COMPRESS_NONE: payload bytes are uncompressed.
-	put32(module, 1320, uint32(len(config.Payload)))
+	put32(module, 8, uint32(config.Compression))
+	put32(module, 1320, uint32(len(moduleData)))
 	put32(module, 1324, uint32(len(config.Payload)))
-	copy(module[moduleDataOffset:], config.Payload)
-	if err := randomFill(module[moduleDataOffset+len(config.Payload) : moduleDataOffset+len(config.Payload)+int(modPadByte[0])]); err != nil {
+	copy(module[moduleDataOffset:], moduleData)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, "", err
+	}
+	if err := randomFill(module[moduleDataOffset+len(moduleData) : moduleDataOffset+len(moduleData)+int(modPadByte[0])]); err != nil {
 		return nil, nil, "", fmt.Errorf("module padding: %w", err)
 	}
 
@@ -139,6 +189,10 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 		}
 	} else if config.ModuleType == ModuleNativeDLL {
 		copyCString(module[780:1036], config.Method)
+		copyCString(module[1036:1292], config.Arguments)
+		if config.Unicode {
+			put32(module, 1296, 1)
+		}
 	}
 	if config.ModuleType == ModuleNativeExecutable || managed {
 		arg0 := "AAAA"
@@ -149,6 +203,10 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 			}
 		}
 		copy(module[1036:1040], arg0)
+		if config.Arguments != "" {
+			module[1040] = ' '
+			copyCString(module[1041:1292], config.Arguments)
+		}
 		if managed {
 			put32(module, 1292, 1) // Ignore the private synthetic argv[0].
 		}
@@ -168,13 +226,13 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 			}
 		}
 		if len(moduleName) > 8 || strings.ContainsAny(moduleName, "/\\\x00") {
-			return nil, nil, "", fmt.Errorf("invalid staging module name")
+			return nil, nil, "", fail(FailureInvalidConfiguration, "invalid staging module name")
 		}
 		if !strings.HasSuffix(config.StagingURL, "/") {
 			config.StagingURL += "/"
 		}
 		if len(config.StagingURL)+len(moduleName) > 255 {
-			return nil, nil, "", fmt.Errorf("staging URL exceeds wire format size limit")
+			return nil, nil, "", fail(FailureInvalidConfiguration, "staging URL exceeds wire format size limit")
 		}
 	}
 	instLen := instanceSize + int(instPadByte[0])
@@ -182,7 +240,7 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 		instLen += modLen
 	}
 	if instLen > math.MaxInt32 {
-		return nil, nil, "", fmt.Errorf("instance exceeds wire format size limit")
+		return nil, nil, "", fail(FailureFileInvalid, "instance exceeds wire format size limit")
 	}
 	instance = make([]byte, instLen)
 	put32(instance, 0, uint32(instLen))
@@ -195,7 +253,7 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 		put32(instance, 1368, 1)
 	}
 	put64(instance, 3232, uint64(modLen))
-	copyCString(instance[576:832], "ole32;oleaut32;wininet;mscoree;shell32")
+	copyCString(instance[576:832], dllNames)
 	copyCString(instance[1392:1912], config.Decoy)
 	setPayloadStringsAndGUIDs(instance, config.ModuleType, config.Thread)
 	if staging {
@@ -205,6 +263,9 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 	} else {
 		put32(instance, 2152, 1) // FRITTER_INSTANCE_EMBED
 		copy(instance[instanceModOff:], module)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, "", err
 	}
 	if err := randomFill(instance[instLen-int(instPadByte[0]):]); err != nil {
 		return nil, nil, "", fmt.Errorf("instance padding: %w", err)
@@ -243,11 +304,18 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 		fillAPIHashes(instance, imports, binary.LittleEndian.Uint64(iv[:]), poly)
 		if staging {
 			put64(module, 1312, mac)
-			Crypt(module, &moduleKey, &moduleCTR, poly)
+			if err := CryptContext(ctx, module, &moduleKey, &moduleCTR, poly); err != nil {
+				return nil, nil, "", err
+			}
 		}
-		Crypt(instance[instanceCryptOff:], &instanceKey, &instanceCTR, poly)
+		if err := CryptContext(ctx, instance[instanceCryptOff:], &instanceKey, &instanceCTR, poly); err != nil {
+			return nil, nil, "", err
+		}
 	} else {
 		fillAPIHashes(instance, imports, 0, poly)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, "", err
 	}
 	if staging {
 		staged = module
@@ -262,14 +330,12 @@ func validateConfigText(config Config) error {
 	}{
 		{"runtime", config.Runtime, 255}, {"domain", config.Domain, 8},
 		{"class", config.Class, 255}, {"method", config.Method, 255},
+		{"arguments", config.Arguments, 250},
 		{"decoy", config.Decoy, 519}, {"staging URL", config.StagingURL, 247},
 	} {
 		if len(field.value) > field.max || strings.IndexByte(field.value, 0) >= 0 {
 			return fmt.Errorf("%s is too long or contains NUL", field.name)
 		}
-	}
-	if config.ModuleType == ModuleDotNetDLL && (config.Class == "" || config.Method == "") {
-		return fmt.Errorf("managed DLL requires class and method")
 	}
 	return nil
 }

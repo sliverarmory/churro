@@ -56,7 +56,7 @@ BOOL CheckForILOnly(PIMAGE_NT_HEADERS nthost, ULONG_PTR host);
 // In-Memory execution of unmanaged DLL file. YMMV with EXE files requiring subsystem..
 VOID RunPE(PFRITTER_INSTANCE inst, PFRITTER_MODULE mod) {
     PIMAGE_DOS_HEADER           dos, doshost;
-    PIMAGE_NT_HEADERS           nt, nthost, ntnew, origmod;
+    PIMAGE_NT_HEADERS           nt, nthost, ntnew, origmod = NULL;
     PIMAGE_SECTION_HEADER       sh;
     PIMAGE_SECTION_HEADER       shcp = NULL;
     PIMAGE_THUNK_DATA           oft, ft;
@@ -547,8 +547,33 @@ VOID RunPE(PFRITTER_INSTANCE inst, PFRITTER_MODULE mod) {
               if(mod->args[0] != 0) {
                 if(mod->unicode) {
                   ansi2unicode(inst, mod->args, buf);
+                  DllParam((PVOID)buf);
+                } else if(inst->utf8) {
+                  // The typed generator stores UTF-8, but an ANSI export
+                  // expects bytes in the target process's active code page.
+                  // Use a caller-owned buffer so the string remains alive
+                  // throughout the export call without a heap allocation.
+                  CHAR ansi_buf[FRITTER_MAX_NAME * 2];
+                  ANSI_STRING ansi_arg;
+                  UNICODE_STRING wide_arg;
+                  if(ansi2unicode(inst, mod->args, buf) == 0) {
+                    DPRINT("Converting UTF-8 export argument failed");
+                    goto pe_cleanup;
+                  }
+                  inst->api.RtlInitUnicodeString(&wide_arg, buf);
+                  ansi_arg.Buffer = ansi_buf;
+                  ansi_arg.Length = 0;
+                  ansi_arg.MaximumLength = sizeof(ansi_buf);
+                  status = inst->api.RtlUnicodeStringToAnsiString(&ansi_arg, &wide_arg, FALSE);
+                  if(status < 0 || ansi_arg.Length >= sizeof(ansi_buf)) {
+                    DPRINT("Converting export argument to the target ANSI code page failed");
+                    goto pe_cleanup;
+                  }
+                  ansi_buf[ansi_arg.Length] = '\0';
+                  DllParam((PVOID)ansi_buf);
+                } else {
+                  DllParam((PVOID)mod->args);
                 }
-                DllParam((mod->unicode) ? (PVOID)buf : (PVOID)mod->args);
               } else {
                 // execute DLL function with no parameters
                 DllVoid = (DllVoid_t)DllParam;

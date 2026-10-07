@@ -5,14 +5,17 @@ shellcode buffer. It is an importable Go package and a standalone CLI. It
 ports Fritter's host-side generator to Go and keeps the typed payload boundary
 used by [Fritter's Go API](https://github.com/sliverarmory/Fritter).
 
+Feature parity work and its acceptance evidence are tracked in
+[ROADMAP.md](ROADMAP.md).
+
 The generator and CLI are Go code and do not use cgo. Like
 [Malasada](https://github.com/sliverarmory/malasada) and
 [Beignet](https://github.com/sliverarmory/beignet), Churro embeds checked-in
-native loader blobs. They are built from Fritter source at
+native loader blobs. Their source is derived from Fritter at
 [`ff952a22`](https://github.com/sliverarmory/Fritter/commit/ff952a22b1cf06d41b3781ab7c20f608b9754e53)
-with a local TLS callback fix, and execute as native code inside a Windows
-process. Go consumers do not need
-a C compiler, Zig, WebAssembly, or a sidecar executable.
+with a local TLS callback fix and named MinGW code sections. The blobs execute
+as native code inside a Windows process. Go consumers do not need a C compiler,
+Zig, WebAssembly, or a sidecar executable.
 
 ## Build
 
@@ -23,33 +26,49 @@ make build
 make test
 ```
 
-The checked-in loader blobs are build inputs. To regenerate them from the
-pinned source in this repository, install a host C compiler and an x64 MinGW
-cross compiler, then run `make loader-assets`. Rebuilding is deterministic
-with the pinned headers and toolchain described in
+The checked-in loader blobs and their metadata are build inputs. To regenerate
+them from the source in this repository, install a host C compiler and an x64
+MinGW cross compiler, then run `make loader-assets`. The default rebuild uses
+the pinned constants. Run
+`./scripts/rebuild-loader-blobs.sh --rotate --output-dir DIR` to create a
+custom bundle with fresh cipher/hash constants and API ordering;
+`--seed N` makes that rotation reproducible. See
 [`internal/loader/README.md`](internal/loader/README.md). Zig is optional and
 is not used in the tested rebuild path. Normal Go builds need neither compiler.
 
 The generated CLI accepts Windows x64 `.exe` and `.dll` images, plus `.vbs`
 and `.js` source. Native and managed PE inputs are selected from the PE
-headers. A native DLL's `DllMain` runs, followed by the named parameterless
-export when `-method` is set.
+headers. A native DLL's `DllMain` runs, followed by the named export when
+`-method` is set. `-args` supplies a raw command-line tail for native and
+managed executables and managed DLL methods. A native DLL export receives its
+single argument string in the target process ANSI code page; `-unicode`
+selects a UTF-16 export argument. Go callers supply UTF-8 strings for both.
 
 ```sh
 ./churro-gen -input payload.dll -method StartW -output payload.bin
 ./churro-gen -input payload.exe -output executable.bin
-./churro-gen -input assembly.dll -class Example.Entry -method Run -output managed.bin
+./churro-gen -input assembly.dll -class Example.Entry -method Run \
+    -args 'one "two words"' -output managed.bin
 ```
 
 On Windows, use `churro-gen.exe`. Use `-format` to select `bin` (the default),
 `base64`, `c`, `ruby`, `python`, `powershell`, `csharp`, `hex`, or `uuid`. The
-`-exit`, `-entropy`, `-headers`, `-decoy`, and `-thread` flags expose the shared
-loader and native PE options. Run `churro-gen -h` for their accepted values.
+`-exit`, `-entropy`, `-headers`, `-decoy`, `-thread`, `-fork`, and `-compression`
+flags expose the shared loader and native PE options. See
+[`cmd/churro-gen/README.md`](cmd/churro-gen/README.md) for the full CLI
+reference, including compatibility aliases and custom loader bundles.
+
+On Windows, the CLI also attempts to copy Base64 output to the clipboard as
+CF_TEXT. Clipboard access is best effort and does not affect the output file.
+
+The CLI defaults to aPLib compression, matching Fritter's native CLI. The Go
+API's zero-value `CompressionNone` leaves payload bytes uncompressed.
 
 To produce a loader that downloads its module, supply a base URL. The CLI
-writes the opaque staged module beside the loader using its generated name, or
-to the path selected by `-module-output`. Host that module at the URL formed
-from `-server` and its module name; the CLI does not upload it.
+writes the opaque staged module in the current working directory using its
+generated name, or to the path selected by `-module-output`. Host that module
+at the URL formed from `-server` and its module name; the CLI does not upload
+it.
 
 ```sh
 ./churro-gen -input payload.dll -method StartW \
@@ -77,19 +96,28 @@ _ = loader
 ```
 
 The package also has typed `NativeExecutable`, `DotNetExecutable`,
-`DotNetDLL`, `VBScript`, and `JScript` requests. Native DLL exports and managed
-DLL methods must be parameterless. The API does not expose target argv or raw
-command-line arguments. `Format` controls the representation of
-`Result.Loader`; `FormatBinary` is the zero-value default.
+`DotNetDLL`, `VBScript`, and `JScript` requests. Native EXEs accept an argument
+tail, and named native DLL exports accept an argument string with an optional
+Unicode selection. `DotNetExecutable.Arguments` supplies a raw command-line
+tail parsed into the entry point's `string[]`. For managed DLLs,
+`DotNetStaticMethod.Arguments` is parsed into positional string parameters;
+leave it empty for a parameterless method. Arguments are limited to 250 bytes
+and cannot contain NUL. `Format` controls
+the representation of `Result.Loader`; `FormatBinary` is the zero-value
+default. `NewWithLoader` accepts a validated native loader bundle for custom
+build constants and code images.
 
-## Current implementation scope
+## Loader architecture
 
-The embedded MinGW loader currently uses one dispatch region for the whole
-loader and fixed constants in its native build. Churro still randomizes the
-instance and outer and dispatch keys for each output. Its current Go decoder,
-stack alignment, and trampoline instruction forms are simpler than Fritter's
-per-output polymorphic forms. This is a functional generator port, not full
-polymorphic parity with a newly built Fritter binary.
+The checked-in MinGW loader has six code sections and a metadata table for
+cross-section calls. Churro's Go generator rewrites protected calls through
+dispatch thunks and encrypts five sections independently. A synchronized
+dispatcher keeps each section decrypted while calls are active, including
+concurrent calls into the hash resolver. The entry `.text` section stays
+resident. Each output varies its entry prefix, stack setup, decoder,
+trampoline, keys, and dispatch layout.
+The native bundle remains a separate build input, so build-level cipher/hash
+and API variations require a loader rebuild with `--rotate`.
 
 Execute the returned bytes from a page-aligned allocation. The embedded shim
 and native loader are laid out on 4 KiB boundaries relative to the beginning
@@ -99,7 +127,8 @@ of that allocation. The Windows test runner uses `VirtualAlloc` for this.
 
 `go test ./...` checks request validation, blob generation, and output
 formats. Native shellcode execution requires a Windows x64 host. On Windows,
-`scripts/test-windows-e2e.ps1` builds native and Go test DLLs, executes
-generated loaders, and checks TLS, DLL entry, export, and import behavior.
+`scripts/test-windows-e2e.ps1` builds native, Go, managed, and script fixtures,
+executes generated loaders, and checks payload markers, staging, arguments,
+Unicode, TLS, imports, and host continuation.
 The Windows GitHub Actions workflow also generates a Sliver shared library,
 runs its Churro loader, and requires a matching session-open event.

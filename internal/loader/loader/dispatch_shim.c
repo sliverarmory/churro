@@ -145,6 +145,8 @@ typedef struct {
     uint32_t size;
     uint8_t  key;
     uint8_t  flags;
+    /* N>1 dispatcher state: bit 15 is the transition lock and the low
+       15 bits count active calls. The generator zeros it; the shim ignores it. */
     uint16_t _pad;
 } FN_ENTRY;
 

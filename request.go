@@ -17,6 +17,7 @@ const (
 	maxModuleNameBytes   = 8
 	maxStagingBaseBytes  = 247
 	maxHTTPAuthBytes     = 63
+	maxArgumentsBytes    = 250
 
 	moduleDotNetDLL        = 1
 	moduleDotNetExecutable = 2
@@ -31,6 +32,8 @@ type normalizedGeneration struct {
 
 	class   string
 	method  string
+	args    string
+	unicode bool
 	runtime string
 	domain  string
 	decoy   string
@@ -39,6 +42,7 @@ type normalizedGeneration struct {
 
 	format       uint32
 	exit         uint32
+	compression  uint32
 	forkRVA      uint32
 	entropy      uint32
 	headers      uint32
@@ -96,9 +100,13 @@ func normalizeGeneration(request Request) (normalizedGeneration, error) {
 	if request.Loader.Entropy > EntropyNone {
 		return normalized, invalid("loader.entropy", fmt.Sprintf("unknown value %d", request.Loader.Entropy))
 	}
+	if request.Loader.Compression > CompressionAPLib {
+		return normalized, invalid("loader.compression", fmt.Sprintf("unknown value %d", request.Loader.Compression))
+	}
 
 	normalized.format = uint32(request.Format) + 1
 	normalized.exit = uint32(request.Loader.Exit) + 1
+	normalized.compression = uint32(request.Loader.Compression) + 1
 	if request.Loader.HostContinuation != nil {
 		if request.Loader.HostContinuation.EntryPointRVA == 0 {
 			return normalized, invalid("loader.hostContinuation.entryPointRVA", "must not be zero")
@@ -119,6 +127,10 @@ func normalizeGeneration(request Request) (normalizedGeneration, error) {
 	case NativeExecutable:
 		normalized.payload = payload.Image
 		normalized.expectedType = moduleNativeExecutable
+		if err := validateText("payload.arguments", payload.Arguments, maxArgumentsBytes); err != nil {
+			return normalized, err
+		}
+		normalized.args = payload.Arguments
 		if unknown := payload.Flags &^ nativeExecutableFlagsMask; unknown != 0 {
 			return normalized, invalid("payload.flags", fmt.Sprintf("contains unknown bits 0x%x", uint32(unknown)))
 		}
@@ -139,6 +151,11 @@ func normalizeGeneration(request Request) (normalizedGeneration, error) {
 				return normalized, invalid("payload.export.name", "is required")
 			}
 			normalized.method = payload.Export.Name
+			if err := validateText("payload.export.arguments", payload.Export.Arguments, maxArgumentsBytes); err != nil {
+				return normalized, err
+			}
+			normalized.args = payload.Export.Arguments
+			normalized.unicode = payload.Export.Unicode
 		}
 		if err := configureNativePE(&normalized, payload.PE); err != nil {
 			return normalized, err
@@ -146,6 +163,10 @@ func normalizeGeneration(request Request) (normalizedGeneration, error) {
 	case DotNetExecutable:
 		normalized.payload = payload.Assembly
 		normalized.expectedType = moduleDotNetExecutable
+		if err := validateText("payload.arguments", payload.Arguments, maxArgumentsBytes); err != nil {
+			return normalized, err
+		}
+		normalized.args = payload.Arguments
 		normalized.runtime = payload.Runtime.Version
 		normalized.domain = payload.Runtime.AppDomain
 		if err := validateDotNetNames(normalized); err != nil {
@@ -156,6 +177,10 @@ func normalizeGeneration(request Request) (normalizedGeneration, error) {
 		normalized.expectedType = moduleDotNetDLL
 		normalized.class = payload.EntryPoint.TypeName
 		normalized.method = payload.EntryPoint.MethodName
+		if err := validateText("payload.entryPoint.arguments", payload.EntryPoint.Arguments, maxArgumentsBytes); err != nil {
+			return normalized, err
+		}
+		normalized.args = payload.EntryPoint.Arguments
 		normalized.runtime = payload.Runtime.Version
 		normalized.domain = payload.Runtime.AppDomain
 		if strings.TrimSpace(normalized.class) == "" {

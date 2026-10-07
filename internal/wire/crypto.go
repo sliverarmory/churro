@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"context"
 	"encoding/binary"
 	"math/bits"
 )
@@ -13,16 +14,6 @@ type Poly struct {
 	HashRotA        uint32
 	HashRotB        uint32
 	HashRounds      uint32
-}
-
-// DefaultPoly matches the loader blobs in internal/assets (build seed
-// 0xDA44B96C). Keep this in step with poly_seed.h when rebuilding those blobs.
-var DefaultPoly = Poly{
-	CipherRotations: [6]uint32{4, 4, 16, 23, 22, 11},
-	CipherRounds:    20,
-	HashRotA:        3,
-	HashRotB:        13,
-	HashRounds:      27,
 }
 
 func (p Poly) normalized() Poly {
@@ -84,9 +75,20 @@ func hashCipher(key []byte, input uint64, poly Poly) uint64 {
 // in place; callers should keep an unmodified copy of the initial counter in
 // the serialized FRITTER_CRYPT structure.
 func Crypt(data []byte, key *[16]byte, counter *[16]byte, poly Poly) {
+	_ = CryptContext(context.Background(), data, key, counter, poly)
+}
+
+// CryptContext applies the stream cipher with periodic cancellation checks.
+// The caller must discard the partially changed data if it returns an error.
+func CryptContext(ctx context.Context, data []byte, key *[16]byte, counter *[16]byte, poly Poly) error {
 	poly = poly.normalized()
 	var stream [16]byte
-	for len(data) > 0 {
+	for blocks := 0; len(data) > 0; blocks++ {
+		if blocks&4095 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
 		stream = *counter
 		blockCipher(&stream, key, poly)
 		n := min(len(data), len(stream))
@@ -101,6 +103,7 @@ func Crypt(data []byte, key *[16]byte, counter *[16]byte, poly Poly) {
 			}
 		}
 	}
+	return ctx.Err()
 }
 
 func blockCipher(block *[16]byte, key *[16]byte, poly Poly) {

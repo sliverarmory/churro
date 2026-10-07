@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/sliverarmory/churro"
@@ -21,6 +23,8 @@ var version = "dev"
 type payloadOptions struct {
 	class          string
 	method         string
+	arguments      string
+	unicode        bool
 	runtimeVersion string
 	appDomain      string
 	headers        churro.PEHeaders
@@ -33,10 +37,14 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	return runWithClipboard(args, stdout, stderr, copyBase64ToClipboard)
+}
+
+func runWithClipboard(args []string, stdout, stderr io.Writer, copyClipboard func([]byte) error) int {
 	flags := flag.NewFlagSet("churro-gen", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	input := flags.String("input", "", "input Windows x64 EXE, DLL, VBS, or JS path")
-	output := flags.String("output", "loader.bin", "output path")
+	output := flags.String("output", "", "output path (default: loader extension for format)")
 	class := flags.String("class", "", "managed DLL class name")
 	method := flags.String("method", "", "native DLL export or managed DLL method")
 	runtimeVersion := flags.String("runtime", "", "CLR runtime version override")
@@ -44,25 +52,69 @@ func run(args []string, stdout, stderr io.Writer) int {
 	formatName := flags.String("format", "bin", "output format: bin, base64, c, ruby, python, powershell, csharp, hex, uuid")
 	exitName := flags.String("exit", "thread", "loader exit behavior: thread, process, block")
 	entropyName := flags.String("entropy", "default", "output randomization: default, names, none")
+	compressionName := flags.String("compression", "aplib", "payload compression: none, aplib (default)")
+	chunked := flags.String("chunked", "1", "deprecated compatibility flag; dispatch is always enabled")
 	headersName := flags.String("headers", "overwrite", "native PE headers: overwrite, preserve")
 	decoy := flags.String("decoy", "", "native PE decoy module path")
 	thread := flags.Bool("thread", false, "run a native executable entry point in a new thread")
+	arguments := flags.String("args", "", "PE command-line arguments or native DLL export argument")
+	unicode := flags.Bool("unicode", false, "pass native DLL export argument as UTF-16")
+	fork := flags.String("fork", "", "host image continuation entry point RVA (hex)")
 	server := flags.String("server", "", "HTTP or HTTPS base URL for a staged payload")
 	moduleName := flags.String("modname", "", "staged module filename (default: generated)")
-	moduleOutput := flags.String("module-output", "", "staged module output path (default: beside loader)")
+	moduleOutput := flags.String("module-output", "", "staged module output path (default: current directory)")
+	bundleDir := flags.String("loader-bundle", "", "directory containing a custom native loader bundle")
 	showVersion := flags.Bool("version", false, "print version information")
-	if err := flags.Parse(args); err != nil {
+	flags.StringVar(input, "i", "", "alias for -input")
+	flags.StringVar(input, "file", "", "alias for -input")
+	flags.StringVar(output, "o", "", "alias for -output")
+	flags.StringVar(class, "c", "", "alias for -class")
+	flags.StringVar(method, "m", "", "alias for -method")
+	flags.StringVar(method, "function", "", "alias for -method")
+	flags.StringVar(runtimeVersion, "r", "", "alias for -runtime")
+	flags.StringVar(domain, "d", "", "alias for -domain")
+	flags.StringVar(formatName, "f", "bin", "alias for -format")
+	flags.StringVar(exitName, "x", "thread", "alias for -exit")
+	flags.StringVar(entropyName, "e", "default", "alias for -entropy")
+	flags.StringVar(headersName, "k", "overwrite", "alias for -headers")
+	flags.StringVar(decoy, "j", "", "alias for -decoy")
+	flags.BoolVar(thread, "t", false, "alias for -thread")
+	flags.StringVar(arguments, "p", "", "alias for -args")
+	flags.StringVar(arguments, "params", "", "alias for -args")
+	flags.BoolVar(unicode, "w", false, "alias for -unicode")
+	flags.StringVar(fork, "y", "", "alias for -fork")
+	flags.StringVar(fork, "oep", "", "alias for -fork")
+	flags.StringVar(server, "s", "", "alias for -server")
+	flags.StringVar(moduleName, "n", "", "alias for -modname")
+	flags.StringVar(chunked, "g", "1", "alias for -chunked")
+	if err := flags.Parse(nativeCompatibleFlagArgs(flags, args)); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if *showVersion {
 		fmt.Fprintf(stdout, "churro-gen %s\n", version)
 		return 0
 	}
-	if *input == "" || flags.NArg() != 0 {
+	if *input == "" {
 		fmt.Fprintln(stderr, "usage: churro-gen -input payload.dll [-method StartW] [-output loader.bin]")
 		return 2
 	}
+	if *chunked != "0" && *chunked != "1" {
+		fmt.Fprintln(stderr, "-chunked is deprecated and accepts only 0 or 1")
+		return 2
+	}
 	format, err := parseFormat(*formatName)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	outputPath := *output
+	if outputPath == "" {
+		outputPath = defaultOutputForFormat(format)
+	}
+	continuation, err := parseContinuation(*fork)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -73,6 +125,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	entropy, err := parseEntropy(*entropyName)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	compression, err := parseCompression(*compressionName)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -95,6 +152,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	payload, err := payloadForPath(*input, data, payloadOptions{
 		class:          *class,
 		method:         *method,
+		arguments:      *arguments,
+		unicode:        *unicode,
 		runtimeVersion: *runtimeVersion,
 		appDomain:      *domain,
 		headers:        headers,
@@ -105,10 +164,30 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "configure payload: %v\n", err)
 		return 2
 	}
-	result, err := churro.Generate(context.Background(), churro.Request{
+	ctx := context.Background()
+	var generator *churro.Generator
+	if *bundleDir == "" {
+		generator = churro.NewGenerator()
+	} else {
+		bundle, readErr := readBundleDir(*bundleDir)
+		if readErr != nil {
+			fmt.Fprintf(stderr, "read loader bundle: %v\n", readErr)
+			return 2
+		}
+		generator, err = churro.NewWithLoader(ctx, bundle)
+		if err != nil {
+			fmt.Fprintf(stderr, "configure loader bundle: %v\n", err)
+			return 2
+		}
+	}
+	defer generator.Close()
+	result, err := generator.Generate(ctx, churro.Request{
 		Payload: payload,
 		Format:  format,
-		Loader:  churro.LoaderConfig{Exit: exit, Entropy: entropy},
+		Loader: churro.LoaderConfig{
+			Exit: exit, Entropy: entropy, Compression: compression,
+			HostContinuation: continuation,
+		},
 		Staging: staging,
 	})
 	if err != nil {
@@ -128,28 +207,187 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		stagedPath = *moduleOutput
 		if stagedPath == "" {
-			stagedPath = filepath.Join(filepath.Dir(*output), result.StagedModule.Name)
-		}
-		loaderPath, loaderErr := filepath.Abs(*output)
-		stagedAbs, stagedErr := filepath.Abs(stagedPath)
-		if loaderErr != nil || stagedErr != nil || loaderPath == stagedAbs {
-			fmt.Fprintln(stderr, "staged module output must differ from loader output")
-			return 2
+			stagedPath = result.StagedModule.Name
 		}
 	}
-	if err := writeOutput(*output, result.Loader); err != nil {
-		fmt.Fprintf(stderr, "write loader: %v\n", err)
-		return 1
+	if err := validateOutputTargets(*input, outputPath, stagedPath); err != nil {
+		fmt.Fprintf(stderr, "output paths: %v\n", err)
+		return 2
 	}
-	fmt.Fprintf(stdout, "wrote %s (%d bytes)\n", *output, len(result.Loader))
 	if staging != nil {
 		if err := writeOutput(stagedPath, result.StagedModule.Data); err != nil {
 			fmt.Fprintf(stderr, "write staged module: %v\n", err)
 			return 1
 		}
+		// Recheck after creating the module, including aliases through case
+		// insensitive directories or pre-existing hard links.
+		if err := validateOutputTargets(*input, outputPath, stagedPath); err != nil {
+			fmt.Fprintf(stderr, "output paths: %v\n", err)
+			return 2
+		}
+	}
+	if err := writeOutput(outputPath, result.Loader); err != nil {
+		fmt.Fprintf(stderr, "write loader: %v\n", err)
+		return 1
+	}
+	if format == churro.FormatBase64 {
+		// Match Fritter's Windows CLI convenience behavior. Clipboard access is
+		// best effort and must not change the file or command result.
+		_ = copyClipboard(result.Loader)
+	}
+	fmt.Fprintf(stdout, "wrote %s (%d bytes)\n", outputPath, len(result.Loader))
+	if staging != nil {
 		fmt.Fprintf(stdout, "wrote staged module %s (%d bytes)\n", stagedPath, len(result.StagedModule.Data))
 	}
+	stagedURL := ""
+	if result.StagedModule != nil {
+		moduleURL := result.StagedModule.URL
+		moduleURL.User = nil // Do not print Basic Authentication credentials.
+		stagedURL = moduleURL.String()
+	}
+	printGenerationSummary(stdout, *input, outputPath, stagedPath, stagedURL, payload, staging,
+		format, entropy, compression, exit, headers, continuation)
 	return 0
+}
+
+// nativeCompatibleFlagArgs accepts Fritter's attached string values and scans
+// past stray positional arguments. The longest registered flag name wins, so
+// -outputFILE is not mistaken for -o with the value utputFILE. Options without
+// a registered string-flag prefix remain for FlagSet.Parse to reject.
+func nativeCompatibleFlagArgs(flags *flag.FlagSet, args []string) []string {
+	parsed := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-?" {
+			parsed = append(parsed, "-h")
+			continue
+		}
+		if arg == "-" || arg == "--" || !strings.HasPrefix(arg, "-") {
+			continue
+		}
+		prefix := "-"
+		option := arg[1:]
+		if strings.HasPrefix(arg, "--") {
+			prefix = "--"
+			option = arg[2:]
+		}
+		name := option
+		attached := false
+		if delimiter := strings.IndexAny(option, ":="); delimiter >= 0 &&
+			registeredStringFlag(flags.Lookup(option[:delimiter])) {
+			name = option[:delimiter]
+			value := option[delimiter+1:]
+			if value != "" {
+				arg = prefix + name + "=" + value
+				attached = true
+			} else {
+				arg = prefix + name
+			}
+		} else if flags.Lookup(option) == nil {
+			bestName := ""
+			flags.VisitAll(func(candidate *flag.Flag) {
+				if len(candidate.Name) <= len(bestName) || len(candidate.Name) >= len(option) ||
+					!registeredStringFlag(candidate) || !strings.HasPrefix(option, candidate.Name) {
+					return
+				}
+				bestName = candidate.Name
+			})
+			if bestName != "" {
+				name = bestName
+				arg = prefix + name + "=" + option[len(name):]
+				attached = true
+			}
+		}
+		parsed = append(parsed, arg)
+		if !attached && registeredStringFlag(flags.Lookup(name)) && i+1 < len(args) {
+			i++
+			parsed = append(parsed, args[i])
+		}
+	}
+	return parsed
+}
+
+func registeredStringFlag(option *flag.Flag) bool {
+	if option == nil {
+		return false
+	}
+	getter, ok := option.Value.(flag.Getter)
+	if !ok {
+		return false
+	}
+	_, ok = getter.Get().(string)
+	return ok
+}
+
+func printGenerationSummary(out io.Writer, input, output, stagedPath, stagedURL string,
+	payload churro.Payload, staging *churro.HTTPStaging, format churro.Format, entropy churro.Entropy,
+	compression churro.Compression, exit churro.ExitBehavior, headers churro.PEHeaders,
+	continuation *churro.HostImageContinuation) {
+	formatNames := [...]string{"bin", "base64", "c", "ruby", "python", "powershell", "csharp", "hex", "uuid"}
+	fmt.Fprintln(out, "SUCCESS: Shellcode generated.")
+	fmt.Fprintf(out, "  Input        %s\n", input)
+	switch selected := payload.(type) {
+	case churro.NativeExecutable:
+		fmt.Fprintln(out, "  Type         Native EXE")
+	case churro.NativeDLL:
+		fmt.Fprintln(out, "  Type         Native DLL")
+		name := "DllMain"
+		if selected.Export != nil {
+			name = selected.Export.Name
+		}
+		fmt.Fprintf(out, "  Function     %s\n", name)
+	case churro.DotNetExecutable:
+		fmt.Fprintln(out, "  Type         Managed EXE")
+	case churro.DotNetDLL:
+		fmt.Fprintln(out, "  Type         Managed DLL")
+		fmt.Fprintf(out, "  Class        %s\n", selected.EntryPoint.TypeName)
+		fmt.Fprintf(out, "  Method       %s\n", selected.EntryPoint.MethodName)
+		if selected.Runtime.AppDomain != "" {
+			fmt.Fprintf(out, "  Domain       %s\n", selected.Runtime.AppDomain)
+		}
+	case churro.VBScript:
+		fmt.Fprintln(out, "  Type         VBScript")
+	case churro.JScript:
+		fmt.Fprintln(out, "  Type         JScript")
+	}
+	fmt.Fprintf(out, "  Output       %s (%s)\n", output, formatNames[format])
+	if staging == nil {
+		fmt.Fprintln(out, "  Staging      Disabled")
+		fmt.Fprintln(out, "  Instance     Embedded")
+	} else {
+		fmt.Fprintf(out, "  Staging      %s (module %s)\n", strings.ToUpper(staging.BaseURL.Scheme), stagedPath)
+		fmt.Fprintf(out, "  URL          %s\n", stagedURL)
+		fmt.Fprintln(out, "  Instance     HTTP")
+	}
+	if compression == churro.CompressionAPLib {
+		fmt.Fprintln(out, "  Compression  aPLib")
+	} else {
+		fmt.Fprintln(out, "  Compression  None")
+	}
+	switch exit {
+	case churro.ExitProcess:
+		fmt.Fprintln(out, "  Exit         Process")
+	case churro.ExitBlock:
+		fmt.Fprintln(out, "  Exit         Block")
+	default:
+		fmt.Fprintln(out, "  Exit         Thread")
+	}
+	if continuation != nil {
+		fmt.Fprintf(out, "  OEP          0x%X\n", continuation.EntryPointRVA)
+	}
+	protections := []string{"Maru API hashing", "dispatch shim", "polymorphic XOR"}
+	if entropy == churro.EntropyDefault {
+		protections = append([]string{"ARX encryption"}, protections...)
+	}
+	switch payload.(type) {
+	case churro.NativeExecutable, churro.NativeDLL:
+		peHeaders := "overwrite"
+		if headers == churro.PEHeadersPreserve {
+			peHeaders = "preserve"
+		}
+		protections = append(protections, "PE headers "+peHeaders)
+	}
+	fmt.Fprintf(out, "  Protections  %s\n", strings.Join(protections, ", "))
 }
 
 func stagingForFlags(server, moduleName, moduleOutput string) (*churro.HTTPStaging, error) {
@@ -173,38 +411,135 @@ func writeOutput(path string, data []byte) error {
 	return os.WriteFile(path, data, 0o644)
 }
 
+type outputTarget struct {
+	name      string
+	path      string
+	canonical string
+	info      os.FileInfo
+}
+
+// validateOutputTargets prevents a loader or staged module from replacing its
+// input or each other. It creates output directories as writeOutput would, then
+// resolves parent links and checks existing file identities. Direct symlink
+// output files are rejected so even a dangling link cannot hide an alias.
+func validateOutputTargets(input, loader, staged string) error {
+	targets := []outputTarget{{name: "input", path: input}, {name: "loader", path: loader}}
+	if staged != "" {
+		targets = append(targets, outputTarget{name: "staged module", path: staged})
+	}
+	for i := range targets {
+		abs, err := filepath.Abs(targets[i].path)
+		if err != nil {
+			return fmt.Errorf("resolve %s path: %w", targets[i].name, err)
+		}
+		if i != 0 {
+			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+				return fmt.Errorf("create %s directory: %w", targets[i].name, err)
+			}
+			if info, err := os.Lstat(abs); err == nil {
+				if info.Mode()&os.ModeSymlink != 0 {
+					return fmt.Errorf("%s output cannot be a symlink", targets[i].name)
+				}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("inspect %s path: %w", targets[i].name, err)
+			}
+		}
+		parent, err := filepath.EvalSymlinks(filepath.Dir(abs))
+		if err != nil {
+			return fmt.Errorf("resolve %s directory: %w", targets[i].name, err)
+		}
+		targets[i].canonical = filepath.Join(parent, filepath.Base(abs))
+		if info, err := os.Stat(abs); err == nil {
+			targets[i].info = info
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect %s path: %w", targets[i].name, err)
+		}
+	}
+	for i := range targets {
+		for j := i + 1; j < len(targets); j++ {
+			sameName := targets[i].canonical == targets[j].canonical
+			if runtime.GOOS == "windows" {
+				sameName = strings.EqualFold(targets[i].canonical, targets[j].canonical)
+			}
+			if sameName || (targets[i].info != nil && targets[j].info != nil &&
+				os.SameFile(targets[i].info, targets[j].info)) {
+				return fmt.Errorf("%s path must differ from %s path", targets[j].name, targets[i].name)
+			}
+		}
+	}
+	return nil
+}
+
 func parseFormat(value string) (churro.Format, error) {
 	switch strings.ToLower(value) {
-	case "bin", "binary":
+	case "1", "bin", "binary":
 		return churro.FormatBinary, nil
-	case "base64", "b64":
+	case "2", "base64", "b64":
 		return churro.FormatBase64, nil
-	case "c":
+	case "3", "c":
 		return churro.FormatC, nil
-	case "ruby":
+	case "4", "ruby", "rb":
 		return churro.FormatRuby, nil
-	case "python", "py":
+	case "5", "python", "py":
 		return churro.FormatPython, nil
-	case "powershell", "ps1":
+	case "6", "powershell", "ps1", "ps":
 		return churro.FormatPowerShell, nil
-	case "csharp", "cs":
+	case "7", "csharp", "cs":
 		return churro.FormatCSharp, nil
-	case "hex":
+	case "8", "hex":
 		return churro.FormatHex, nil
-	case "uuid":
+	case "9", "uuid":
 		return churro.FormatUUID, nil
 	default:
 		return 0, fmt.Errorf("unsupported output format %q", value)
 	}
 }
 
+func defaultOutputForFormat(format churro.Format) string {
+	switch format {
+	case churro.FormatBase64:
+		return "loader.b64"
+	case churro.FormatC:
+		return "loader.c"
+	case churro.FormatRuby:
+		return "loader.rb"
+	case churro.FormatPython:
+		return "loader.py"
+	case churro.FormatPowerShell:
+		return "loader.ps1"
+	case churro.FormatCSharp:
+		return "loader.cs"
+	case churro.FormatHex:
+		return "loader.hex"
+	case churro.FormatUUID:
+		return "loader.uuid"
+	default:
+		return "loader.bin"
+	}
+}
+
+func parseContinuation(raw string) (*churro.HostImageContinuation, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	value := strings.TrimPrefix(strings.ToLower(raw), "0x")
+	rva, err := strconv.ParseUint(value, 16, 32)
+	if err != nil {
+		return nil, fmt.Errorf("invalid -fork RVA %q: %w", raw, err)
+	}
+	if rva == 0 {
+		return nil, nil
+	}
+	return &churro.HostImageContinuation{EntryPointRVA: uint32(rva)}, nil
+}
+
 func parseExit(value string) (churro.ExitBehavior, error) {
 	switch strings.ToLower(value) {
-	case "thread":
+	case "1", "thread":
 		return churro.ExitThread, nil
-	case "process":
+	case "2", "process":
 		return churro.ExitProcess, nil
-	case "block":
+	case "3", "block":
 		return churro.ExitBlock, nil
 	default:
 		return 0, fmt.Errorf("unsupported exit behavior %q", value)
@@ -213,22 +548,33 @@ func parseExit(value string) (churro.ExitBehavior, error) {
 
 func parseEntropy(value string) (churro.Entropy, error) {
 	switch strings.ToLower(value) {
-	case "default":
+	case "3", "default", "full":
 		return churro.EntropyDefault, nil
-	case "names":
+	case "2", "names", "low":
 		return churro.EntropyNames, nil
-	case "none":
+	case "1", "none":
 		return churro.EntropyNone, nil
 	default:
 		return 0, fmt.Errorf("unsupported entropy mode %q", value)
 	}
 }
 
+func parseCompression(value string) (churro.Compression, error) {
+	switch strings.ToLower(value) {
+	case "none":
+		return churro.CompressionNone, nil
+	case "aplib":
+		return churro.CompressionAPLib, nil
+	default:
+		return 0, fmt.Errorf("unsupported compression mode %q", value)
+	}
+}
+
 func parseHeaders(value string) (churro.PEHeaders, error) {
 	switch strings.ToLower(value) {
-	case "overwrite":
+	case "1", "overwrite":
 		return churro.PEHeadersOverwrite, nil
-	case "preserve":
+	case "2", "preserve":
 		return churro.PEHeadersPreserve, nil
 	default:
 		return 0, fmt.Errorf("unsupported PE header mode %q", value)
@@ -237,57 +583,55 @@ func parseHeaders(value string) (churro.PEHeaders, error) {
 
 func payloadForPath(path string, data []byte, options payloadOptions) (churro.Payload, error) {
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".exe":
+	case ".exe", ".dll":
 		managed, dll, err := inspectPE(data)
 		if err != nil {
 			return nil, err
 		}
-		if dll {
-			return nil, errors.New("input has an .exe name but PE contents identify a DLL")
-		}
-		if options.class != "" || options.method != "" {
-			return nil, errors.New("DLL invocation flags are only valid with a DLL input")
-		}
-		if managed {
-			if options.thread || options.decoy != "" || options.headers != churro.PEHeadersOverwrite {
-				return nil, errors.New("native PE flags are not valid with a managed executable")
-			}
-			return churro.DotNetExecutable{
-				Assembly: data,
-				Runtime:  churro.DotNetRuntime{Version: options.runtimeVersion, AppDomain: options.appDomain},
-			}, nil
-		}
-		if options.runtimeVersion != "" || options.appDomain != "" {
-			return nil, errors.New("-runtime and -domain require a managed input")
-		}
-		flags := churro.NativeExecutableFlags(0)
-		if options.thread {
-			flags |= churro.NativeExecutableRunInThread
-		}
-		return churro.NativeExecutable{
-			Image: data,
-			Flags: flags,
-			PE:    churro.NativePEConfig{Headers: options.headers, DecoyModulePath: options.decoy},
-		}, nil
-	case ".dll":
-		managed, dll, err := inspectPE(data)
-		if err != nil {
-			return nil, err
-		}
+		// Native Fritter first checks the filename extension, then trusts the PE
+		// characteristics for EXE-versus-DLL selection. The Go CLI does the same.
 		if !dll {
-			return nil, errors.New("input has a .dll name but PE contents identify an executable")
+			if options.class != "" || options.method != "" {
+				return nil, errors.New("DLL invocation flags are only valid with a DLL input")
+			}
+			if options.unicode {
+				return nil, errors.New("-unicode is only valid with a native DLL export")
+			}
+			if managed {
+				if options.thread || options.decoy != "" || options.headers != churro.PEHeadersOverwrite {
+					return nil, errors.New("native PE flags are not valid with a managed executable")
+				}
+				return churro.DotNetExecutable{
+					Assembly:  data,
+					Arguments: options.arguments,
+					Runtime:   churro.DotNetRuntime{Version: options.runtimeVersion, AppDomain: options.appDomain},
+				}, nil
+			}
+			if options.runtimeVersion != "" || options.appDomain != "" {
+				return nil, errors.New("-runtime and -domain require a managed input")
+			}
+			flags := churro.NativeExecutableFlags(0)
+			if options.thread {
+				flags |= churro.NativeExecutableRunInThread
+			}
+			return churro.NativeExecutable{
+				Image:     data,
+				Arguments: options.arguments,
+				Flags:     flags,
+				PE:        churro.NativePEConfig{Headers: options.headers, DecoyModulePath: options.decoy},
+			}, nil
 		}
 		if options.thread {
 			return nil, errors.New("-thread is only valid with a native executable")
 		}
 		if managed {
-			if options.decoy != "" || options.headers != churro.PEHeadersOverwrite {
+			if options.unicode || options.decoy != "" || options.headers != churro.PEHeadersOverwrite {
 				return nil, errors.New("native PE flags are not valid with a managed DLL")
 			}
 			return churro.DotNetDLL{
 				Assembly: data,
 				EntryPoint: churro.DotNetStaticMethod{
-					TypeName: options.class, MethodName: options.method,
+					TypeName: options.class, MethodName: options.method, Arguments: options.arguments,
 				},
 				Runtime: churro.DotNetRuntime{Version: options.runtimeVersion, AppDomain: options.appDomain},
 			}, nil
@@ -295,9 +639,12 @@ func payloadForPath(path string, data []byte, options payloadOptions) (churro.Pa
 		if options.class != "" || options.runtimeVersion != "" || options.appDomain != "" {
 			return nil, errors.New("-class, -runtime, and -domain require a managed DLL")
 		}
+		if options.method == "" && (options.arguments != "" || options.unicode) {
+			return nil, errors.New("-args and -unicode require a native DLL -method")
+		}
 		var export *churro.NativeDLLExport
 		if options.method != "" {
-			export = &churro.NativeDLLExport{Name: options.method}
+			export = &churro.NativeDLLExport{Name: options.method, Arguments: options.arguments, Unicode: options.unicode}
 		}
 		return churro.NativeDLL{
 			Image:  data,
@@ -322,7 +669,8 @@ func payloadForPath(path string, data []byte, options payloadOptions) (churro.Pa
 func (options payloadOptions) hasInvocationFlags() bool {
 	return options.class != "" || options.method != "" ||
 		options.runtimeVersion != "" || options.appDomain != "" ||
-		options.decoy != "" || options.thread || options.headers != churro.PEHeadersOverwrite
+		options.arguments != "" || options.unicode || options.decoy != "" ||
+		options.thread || options.headers != churro.PEHeadersOverwrite
 }
 
 func inspectPE(data []byte) (managed bool, dll bool, err error) {

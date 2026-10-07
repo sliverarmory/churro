@@ -15,6 +15,7 @@ func main() {
 	export := flag.String("export", "", "parameterless export to invoke")
 	out := flag.String("out", "", "path for raw shellcode")
 	headers := flag.String("headers", "overwrite", "PE header handling: overwrite or preserve")
+	hostRVA := flag.Uint("host-rva", 0, "host continuation RVA (zero disables continuation)")
 	flag.Parse()
 	if *dll == "" || *export == "" || *out == "" {
 		fatalf("-dll, -export, and -out are required")
@@ -34,12 +35,20 @@ func main() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	var continuation *churro.HostImageContinuation
+	if *hostRVA != 0 {
+		if *hostRVA > 0xffffffff {
+			fatalf("-host-rva exceeds 32 bits")
+		}
+		continuation = &churro.HostImageContinuation{EntryPointRVA: uint32(*hostRVA)}
+	}
 	result, err := churro.Generate(ctx, churro.Request{
 		Payload: churro.NativeDLL{
 			Image:  image,
 			Export: &churro.NativeDLLExport{Name: *export},
 			PE:     churro.NativePEConfig{Headers: peHeaders},
 		},
+		Loader: churro.LoaderConfig{HostContinuation: continuation},
 	})
 	if err != nil {
 		fatalf("generate loader: %v", err)

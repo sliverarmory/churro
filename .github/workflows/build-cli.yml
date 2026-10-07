@@ -1,0 +1,108 @@
+name: Build Churro Go CLI archives
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test Churro Go CLI
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out tested ref
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Test Go packages
+        run: go test ./...
+      - name: Smoke test CLI
+        run: |
+          go run ./cmd/churro-gen \
+            -input testdata/windows-e2e/hello.js \
+            -output "${{ runner.temp }}/hello.bin"
+          test -s "${{ runner.temp }}/hello.bin"
+
+  build:
+    name: Build ${{ matrix.target }}
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: darwin-amd64, goos: darwin, goarch: amd64, goarm: "" }
+          - { target: darwin-arm64, goos: darwin, goarch: arm64, goarm: "" }
+          - { target: freebsd-amd64, goos: freebsd, goarch: amd64, goarm: "" }
+          - { target: freebsd-arm64, goos: freebsd, goarch: arm64, goarm: "" }
+          - { target: linux-386, goos: linux, goarch: "386", goarm: "" }
+          - { target: linux-amd64, goos: linux, goarch: amd64, goarm: "" }
+          - { target: linux-armv7, goos: linux, goarch: arm, goarm: "7" }
+          - { target: linux-arm64, goos: linux, goarch: arm64, goarm: "" }
+          - { target: windows-386, goos: windows, goarch: "386", goarm: "" }
+          - { target: windows-amd64, goos: windows, goarch: amd64, goarm: "" }
+          - { target: windows-arm64, goos: windows, goarch: arm64, goarm: "" }
+    steps:
+      - name: Check out tested ref
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          persist-credentials: false
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build and package CLI
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+          RELEASE_TAG: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.ref_name || format('ci-{0}', github.run_id) }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          stem="churro-gen_${RELEASE_TAG}_${TARGET}"
+          package_dir="release/${stem}"
+          binary_name="churro-gen"
+          archive_name="${stem}.tar.gz"
+          if [[ "${GOOS}" == "windows" ]]; then
+            binary_name="churro-gen.exe"
+            archive_name="${stem}.zip"
+          fi
+          mkdir -p "${package_dir}/cmd/churro-gen" "${package_dir}/internal/loader"
+          go build -trimpath -ldflags "-s -w -X main.version=${RELEASE_TAG}" \
+            -o "${package_dir}/${binary_name}" ./cmd/churro-gen
+          git rev-parse HEAD > "${package_dir}/SOURCE_COMMIT"
+          cp LICENSE README.md ROADMAP.md "${package_dir}/"
+          cp cmd/churro-gen/README.md "${package_dir}/cmd/churro-gen/"
+          cp internal/loader/README.md "${package_dir}/internal/loader/"
+          if [[ "${GOOS}" == "windows" ]]; then
+            (cd release && zip -qr "${archive_name}" "${stem}")
+          else
+            tar -C release -czf "release/${archive_name}" "${stem}"
+          fi
+          (cd release && sha256sum "${archive_name}" > "${archive_name}.sha256")
+          git rev-parse HEAD > "release/${archive_name}.commit"
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: churro-gen-${{ matrix.target }}
+          path: |
+            release/*.tar.gz
+            release/*.zip
+            release/*.sha256
+            release/*.commit
+          if-no-files-found: error
+          retention-days: 7

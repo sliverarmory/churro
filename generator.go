@@ -3,7 +3,10 @@ package churro
 import (
 	"context"
 	"crypto/rand"
+	"errors"
+	"fmt"
 	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/sliverarmory/churro/internal/wire"
@@ -14,6 +17,7 @@ import (
 type Generator struct {
 	mu     sync.RWMutex
 	closed bool
+	bundle *LoaderBundle
 }
 
 // NewGenerator returns a reusable generator. Generation does not require a
@@ -27,6 +31,19 @@ func New(ctx context.Context) (*Generator, error) {
 		return nil, err
 	}
 	return NewGenerator(), nil
+}
+
+// NewWithLoader creates a generator from caller-supplied x64 loader images and
+// matching cipher/API metadata. The bundle is copied before this call returns.
+func NewWithLoader(ctx context.Context, bundle LoaderBundle) (*Generator, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := bundle.validate(); err != nil {
+		return nil, fmt.Errorf("invalid loader bundle: %w", err)
+	}
+	copy := bundle.clone()
+	return &Generator{bundle: &copy}, nil
 }
 
 // Generate is the one-shot API for a single request.
@@ -47,38 +64,54 @@ func (g *Generator) Generate(ctx context.Context, request Request) (Result, erro
 	}
 	n, err := normalizeGeneration(request)
 	if err != nil {
-		return Result{}, err
+		return Result{}, classifyValidationFailure(err)
 	}
-	instance, staged, moduleName, err := wire.Build(wire.Config{
-		Payload:    n.payload,
-		ModuleType: int(n.expectedType),
-		Runtime:    n.runtime,
-		Domain:     n.domain,
-		Class:      n.class,
-		Method:     n.method,
-		Entropy:    int(n.entropy),
-		Exit:       int(n.exit),
-		Headers:    int(n.headers),
-		Thread:     n.thread != 0,
-		OEP:        n.forkRVA,
-		Decoy:      n.decoy,
-		StagingURL: n.server,
-		ModuleName: n.module,
-		UTF8:       true,
-	})
+	config := wire.Config{
+		Payload:     n.payload,
+		ModuleType:  int(n.expectedType),
+		Runtime:     n.runtime,
+		Domain:      n.domain,
+		Class:       n.class,
+		Method:      n.method,
+		Arguments:   n.args,
+		Unicode:     n.unicode,
+		Entropy:     int(n.entropy),
+		Exit:        int(n.exit),
+		Compression: int(n.compression),
+		Headers:     int(n.headers),
+		Thread:      n.thread != 0,
+		OEP:         n.forkRVA,
+		Decoy:       n.decoy,
+		StagingURL:  n.server,
+		ModuleName:  n.module,
+		UTF8:        true,
+	}
+	if g.bundle != nil {
+		config.Poly, config.APIImports = g.bundle.wireMetadata()
+	}
+	instance, staged, moduleName, err := wire.BuildContext(ctx, config)
 	if err != nil {
-		return Result{}, err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return Result{}, err
+		}
+		return Result{}, classifyWireFailure(err)
 	}
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	raw, err := buildLoader(instance, rand.Reader)
+	raw, err := buildLoaderWithImagesContext(ctx, instance, rand.Reader, g.bundle)
 	if err != nil {
-		return Result{}, err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return Result{}, err
+		}
+		return Result{}, &GenerationError{Code: ErrorInvalidConfiguration, Cause: err}
 	}
-	loader, err := formatLoader(raw, request.Format)
+	loader, err := formatLoaderContext(ctx, raw, request.Format)
 	if err != nil {
-		return Result{}, err
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return Result{}, err
+		}
+		return Result{}, &GenerationError{Code: ErrorInvalidFormat, Cause: err}
 	}
 	result := Result{Loader: loader}
 	if staged != nil {
@@ -92,7 +125,74 @@ func (g *Generator) Generate(ctx context.Context, request Request) (Result, erro
 		}
 		result.StagedModule = &StagedModule{Name: moduleName, URL: moduleURL, Data: staged}
 	}
-	return result, ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+	return result, nil
+}
+
+func classifyValidationFailure(err error) error {
+	var validation *ValidationError
+	if !errors.As(err, &validation) {
+		return &GenerationError{Code: ErrorRandom, Cause: err}
+	}
+	code := ErrorInvalidConfiguration
+	switch validation.Field {
+	case "format":
+		code = ErrorInvalidFormat
+	case "loader.entropy":
+		code = ErrorInvalidEntropy
+	case "loader.compression":
+		code = ErrorCompressionEngine
+	case "payload":
+		if validation.Problem == "is empty" || validation.Problem == "is required" || validation.Problem == "is nil" {
+			code = ErrorFileEmpty
+		}
+	case "payload.export.name", "payload.export.arguments":
+		code = ErrorDLLInvocation
+	case "payload.entryPoint.typeName", "payload.entryPoint.methodName":
+		code = ErrorDotNetEntryPoint
+	case "payload.pe.headers":
+		code = ErrorInvalidHeaders
+	case "payload.pe.decoyModulePath":
+		code = ErrorInvalidDecoy
+	case "staging.baseURL":
+		code = ErrorInvalidURL
+		if strings.HasPrefix(validation.Problem, "exceeds ") {
+			code = ErrorURLTooLong
+		}
+	case "staging.moduleName":
+		code = ErrorInvalidURL
+	}
+	return &GenerationError{Code: code, Cause: err}
+}
+
+func classifyWireFailure(err error) error {
+	code := ErrorInvalidConfiguration
+	var failure *wire.Failure
+	if errors.As(err, &failure) {
+		switch failure.Kind {
+		case wire.FailureFileEmpty:
+			code = ErrorFileEmpty
+		case wire.FailureFileInvalid:
+			code = ErrorFileInvalid
+		case wire.FailureArchitectureMismatch:
+			code = ErrorArchitectureMismatch
+		case wire.FailureMixedAssembly:
+			code = ErrorMixedAssembly
+		case wire.FailureDLLExport:
+			code = ErrorDLLExport
+		case wire.FailurePayloadTypeMismatch:
+			code = ErrorPayloadTypeMismatch
+		case wire.FailureDotNetEntryPoint:
+			code = ErrorDotNetEntryPoint
+		case wire.FailureCompression:
+			code = ErrorCompression
+		case wire.FailureRandom:
+			code = ErrorRandom
+		}
+	}
+	return &GenerationError{Code: code, Cause: err}
 }
 
 // Close prevents later generation calls. Active calls finish first.

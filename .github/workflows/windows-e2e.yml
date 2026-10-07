@@ -11,8 +11,51 @@ permissions:
   contents: read
 
 jobs:
+  cli-release-matrix:
+    name: Build 11 Go CLI archives
+    uses: ./.github/workflows/build-cli.yml
+
+  rotated-bundle:
+    name: Build rotated native loader bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install x64 MinGW compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+      - name: Build bundle with rotated Poly and API constants
+        run: |
+          ./scripts/rebuild-loader-blobs.sh --rotate --seed 0x12345678 --output-dir "$RUNNER_TEMP/churro-rotated-bundle"
+          ! cmp -s "$RUNNER_TEMP/churro-rotated-bundle/poly_seed.h" internal/assets/poly_seed.h
+          ! cmp -s "$RUNNER_TEMP/churro-rotated-bundle/api_shuffle.h" internal/assets/api_shuffle.h
+      - name: Build bundle with an added Advapi32 API import
+        run: |
+          ./scripts/build-custom-api-test-bundle.sh "$RUNNER_TEMP/churro-custom-api-bundle"
+          python3 -c 'import json,os; imports=json.load(open(os.path.join(os.environ["RUNNER_TEMP"],"churro-custom-api-bundle","bundle.json")))["api_imports"]; assert len(imports)==62; assert imports[0]=={"module":"kernel32.dll","name":"LoadLibraryA"}; assert {"module":"advapi32.dll","name":"GetUserNameA"} in imports'
+          go run ./cmd/churro-gen -input testdata/windows-e2e/hello.js -loader-bundle "$RUNNER_TEMP/churro-custom-api-bundle" -output "$RUNNER_TEMP/custom-api-smoke.bin"
+          test -s "$RUNNER_TEMP/custom-api-smoke.bin"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: churro-rotated-loader-bundle
+          path: ${{ runner.temp }}/churro-rotated-bundle/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: churro-custom-api-loader-bundle
+          path: ${{ runner.temp }}/churro-custom-api-bundle/
+          if-no-files-found: error
+
   libraries:
-    name: Native and Go DLL loaders
+    name: Windows payload formats and staging
+    needs: rotated-bundle
     runs-on: windows-2022
     timeout-minutes: 40
     steps:
@@ -23,11 +66,68 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: churro-rotated-loader-bundle
+          path: ${{ runner.temp }}/churro-rotated-bundle
+      - uses: actions/download-artifact@v4
+        with:
+          name: churro-custom-api-loader-bundle
+          path: ${{ runner.temp }}/churro-custom-api-bundle
       - name: Test Go packages
         run: go test ./...
-      - name: Generate and execute Windows DLL loaders
+      - name: Verify concurrent protected hash dispatch
+        run: go test -v . -run '^TestWindowsProtectedHashConcurrent$' -count=1
+      - name: Test Windows clipboard readback
+        env:
+          CHURRO_TEST_CLIPBOARD: "1"
+        run: go test -v ./cmd/churro-gen -run '^TestWindowsClipboardCFTextReadback$' -count=1
+      - name: Generate and execute Windows payload loaders
         shell: pwsh
-        run: ./scripts/test-windows-e2e.ps1
+        run: ./scripts/test-windows-e2e.ps1 -LoaderBundleDirectory "$env:RUNNER_TEMP\churro-rotated-bundle" -CustomImportBundleDirectory "$env:RUNNER_TEMP\churro-custom-api-bundle"
+
+  clr-v2:
+    name: CLR v2 managed EXE and DLL
+    runs-on: windows-2022
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Enable .NET Framework 3.5 and require CLR v2
+        shell: powershell
+        timeout-minutes: 12
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $feature = Get-WindowsFeature -Name NET-Framework-Core
+          if ($null -eq $feature) {
+            throw 'Windows feature NET-Framework-Core is unavailable on this runner'
+          }
+          if ($feature.InstallState -ne 'Installed') {
+            try {
+              $installed = Install-WindowsFeature -Name NET-Framework-Core -ErrorAction Stop
+            } catch {
+              throw "Could not install NET-Framework-Core from Windows Update or the runner component store: $_"
+            }
+            if (-not $installed.Success) {
+              throw "NET-Framework-Core installation failed: $($installed.ExitCode)"
+            }
+            if ($installed.RestartNeeded -eq 'Yes') {
+              throw 'NET-Framework-Core installation requires a restart, so CLR v2 cannot be tested on this runner'
+            }
+          }
+          $feature = Get-WindowsFeature -Name NET-Framework-Core
+          if ($feature.InstallState -ne 'Installed') {
+            throw "NET-Framework-Core is $($feature.InstallState), not Installed"
+          }
+      - name: Generate and execute CLR v2 managed payloads
+        shell: pwsh
+        timeout-minutes: 12
+        run: ./scripts/test-windows-clr-v2.ps1
 
   sliver-session:
     name: Generated Sliver DLL opens a session
