@@ -13,7 +13,7 @@ permissions:
 jobs:
   cli-release-matrix:
     name: Build 11 Go CLI archives
-    uses: ./.github/workflows/release.yml
+    uses: ./.github/workflows/build-cli.yml
 
   rotated-bundle:
     name: Build rotated native loader bundle

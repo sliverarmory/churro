@@ -173,11 +173,12 @@ try {
     if (-not $Csc) {
         throw "The .NET Framework 4 C# compiler was not found"
     }
+    $ManagedSource = Join-Path $Root "testdata/windows-e2e/managed.cs"
     Invoke-Checked "build managed EXE" {
-        & $Csc /nologo /target:exe /platform:x64 "/out:$ManagedExe" ./testdata/windows-e2e/managed.cs
+        & $Csc /nologo /target:exe /platform:x64 "/out:$ManagedExe" $ManagedSource
     }
     Invoke-Checked "build managed DLL" {
-        & $Csc /nologo /target:library /platform:x64 "/out:$ManagedDll" ./testdata/windows-e2e/managed.cs
+        & $Csc /nologo /target:library /platform:x64 "/out:$ManagedDll" $ManagedSource
     }
 
     Invoke-TestCase "go-dll-cli" {
