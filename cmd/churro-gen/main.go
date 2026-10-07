@@ -47,7 +47,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	formatName := flags.String("format", "bin", "output format: bin, base64, c, ruby, python, powershell, csharp, hex, uuid")
 	exitName := flags.String("exit", "thread", "loader exit behavior: thread, process, block")
 	entropyName := flags.String("entropy", "default", "output randomization: default, names, none")
-	compressionName := flags.String("compression", "none", "payload compression: none, aplib")
+	compressionName := flags.String("compression", "aplib", "payload compression: none, aplib (default)")
 	chunked := flags.String("chunked", "1", "deprecated compatibility flag; dispatch is always enabled")
 	headersName := flags.String("headers", "overwrite", "native PE headers: overwrite, preserve")
 	decoy := flags.String("decoy", "", "native PE decoy module path")
@@ -83,6 +83,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 	flags.StringVar(moduleName, "n", "", "alias for -modname")
 	flags.StringVar(chunked, "g", "1", "alias for -chunked")
 	if err := flags.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
 		return 2
 	}
 	if *showVersion {

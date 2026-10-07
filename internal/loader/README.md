@@ -21,12 +21,26 @@ Churro carries these source changes:
   packer implementation. The copied Fritter source and our changes are
   distributed under the repository's BSD 3-Clause license.
 
+In multi-section output, `.text` and `.hash_ch` stay resident. The hash
+resolver can run on both the loader thread and a newly created module thread;
+encrypting it during another call would race. The other four sections use
+call thunks. The shim's protection and wipe length includes the appended
+dispatcher and thunk tail.
+
 `scripts/rebuild-loader-blobs.sh` builds both PEB variants and the dispatch
 shim with x64 MinGW, then emits `*.bin`, `*_metadata.json`, and `bundle.json`
 into `internal/assets/`. It checks the pinned Poly/API headers before a normal
 rebuild. The manifest includes image hashes and the Poly/API metadata compiled
 into those images. `buildmeta` also generates the matching Go defaults in
 `internal/wire/generated_constants.go` for an embedded rebuild.
+
+For a custom multi-section bundle, references into protected sections must
+be direct x64 `CALL rel32` instructions (`E8` with a five-byte instruction
+and displacement at byte 1). The Go generator validates this before patching
+thunks; RIP-relative data accesses, jumps, and conditional branches cannot
+use call dispatch. The current dispatcher forwards the four Win64 register
+arguments (`RCX`, `RDX`, `R8`, `R9`) and the return value. Protected callees
+in custom bundles must not require stack arguments.
 
 To create a reproducible custom build without changing embedded assets:
 

@@ -1,5 +1,6 @@
 param(
-    [string]$BuildDirectory = "build/windows-e2e"
+    [string]$BuildDirectory = "build/windows-e2e",
+    [string]$LoaderBundleDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,6 +14,13 @@ $BuildPath = if ([System.IO.Path]::IsPathRooted($BuildDirectory)) {
     Join-Path $Root $BuildDirectory
 }
 New-Item -ItemType Directory -Force -Path $BuildPath | Out-Null
+$RotatedBundle = $null
+if ($LoaderBundleDirectory) {
+    $RotatedBundle = (Resolve-Path -LiteralPath $LoaderBundleDirectory -ErrorAction Stop).Path
+    if (-not (Test-Path -LiteralPath (Join-Path $RotatedBundle "bundle.json") -PathType Leaf)) {
+        throw "Rotated loader bundle manifest is missing from $RotatedBundle"
+    }
+}
 
 $GccCandidates = @(
     $env:CC,
@@ -270,6 +278,15 @@ try {
             ".imports" = "relocations and imports"
         }
     }
+    if ($RotatedBundle) {
+        Invoke-TestCase "rotated-loader-bundle" {
+            Invoke-CLILoaderCase -Label "rotated-loader-bundle" -InputPath $ImportsDll -Options @(
+                "-method", "RunImports", "-loader-bundle", $RotatedBundle
+            ) -Markers @{
+                ".imports" = "relocations and imports"
+            }
+        }
+    }
     Invoke-TestCase "authenticated HTTP and HTTPS staging" {
         Invoke-Checked "execute staged loaders" {
             & $StagedExe -dll $ImportsDll -runner $RunnerExe -out-dir $BuildPath
@@ -283,13 +300,14 @@ try {
         $Label = "host-continuation"
         $Loader = Join-Path $BuildPath "$Label.bin"
         $env:CHURRO_E2E_PREFIX = Join-Path $BuildPath $Label
+        $HostRVAHex = "0x{0:x}" -f [uint32]::Parse($HostRVA)
         $HostMarkers = @{
             ".continued" = "host thread continued"
             ".imports" = "relocations and imports"
         }
         Clear-Markers $env:CHURRO_E2E_PREFIX $HostMarkers
-        Invoke-Checked "generate host continuation loader" {
-            & $GenerateExe -dll $ImportsDll -export RunImports -host-rva $HostRVA -out $Loader
+        Invoke-Checked "generate host continuation loader through public CLI" {
+            & $CliExe -input $ImportsDll -method RunImports -fork $HostRVAHex -output $Loader
         }
         & $ContinuationExe --loader $Loader
         $RunnerExitCode = $LASTEXITCODE

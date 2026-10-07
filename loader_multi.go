@@ -18,6 +18,13 @@ const (
 	shimMaxFunctions  = 16
 )
 
+func residentLoaderFunction(fn LoaderFunction) bool {
+	// The loader entry and the hash resolver can be called concurrently
+	// after CreateThread. Only sections with no concurrent callers may be
+	// toggled between encrypted and executable bytes by the dispatcher.
+	return strings.HasPrefix(fn.Name, ".text") || fn.Name == ".hash_ch"
+}
+
 func embeddedLoaderMetadata(second bool) (LoaderMetadata, error) {
 	var raw []byte
 	if second {
@@ -55,11 +62,18 @@ func prepareCombinedWithMetadata(loaderImage, shimImage []byte, meta LoaderMetad
 
 	resident := make([]bool, len(meta.Functions))
 	for i, fn := range meta.Functions {
-		resident[i] = strings.HasPrefix(fn.Name, ".text")
+		resident[i] = residentLoaderFunction(fn)
 	}
 	protectedRefs := 0
-	for _, ref := range meta.References {
+	for i, ref := range meta.References {
 		if !resident[ref.TargetFn] {
+			// The thunk tail-jumps into a dispatcher that CALLs the callee
+			// and then returns to the original CALL's return address.
+			// RIP-relative data, jumps, and conditional branches need
+			// different semantics and cannot use this path.
+			if ref.InstLength != 5 || ref.DispOffset != 1 || loaderImage[ref.SrcBlobOff] != 0xe8 {
+				return nil, fmt.Errorf("reference %d into protected section is not CALL rel32", i)
+			}
 			protectedRefs++
 		}
 	}
@@ -83,7 +97,10 @@ func prepareCombinedWithMetadata(loaderImage, shimImage []byte, meta LoaderMetad
 	if _, err := io.ReadFull(entropy, combined[shimPadded+len(loaderImage):]); err != nil {
 		return nil, fmt.Errorf("generate dispatch padding: %w", err)
 	}
-	if err := patchShimBounds(combined[:len(shimImage)], uint32(shimPadded), uint32(len(loaderImage))); err != nil {
+	// Include the dispatcher tail in the shim's page protection and wipe
+	// range. The function table still starts the resident tail at the end
+	// of the original loader image.
+	if err := patchShimBounds(combined[:len(shimImage)], uint32(shimPadded), uint32(len(loaderImage)+tailSize)); err != nil {
 		return nil, err
 	}
 	marker := []byte{0xb1, 0x7a, 0x7e, 0xf1, 0xb1, 0x7a, 0x7e, 0xf1}
@@ -96,7 +113,10 @@ func prepareCombinedWithMetadata(loaderImage, shimImage []byte, meta LoaderMetad
 	}
 
 	dispatchOff := shimPadded + len(loaderImage) + prePad
-	dispatcher := emitNativeDispatcher(uint32(dispatchOff), uint32(shimPadded), uint32(ft), inputSwap)
+	dispatcher, err := emitNativeDispatcher(uint32(dispatchOff), uint32(shimPadded), uint32(ft), inputSwap, entropy)
+	if err != nil {
+		return nil, err
+	}
 	if len(dispatcher) > dispatchSlotSize {
 		return nil, fmt.Errorf("dispatch code exceeds reserved slot: %d", len(dispatcher))
 	}
@@ -201,68 +221,241 @@ func emitNativeThunk(targetOff, fnID uint32, dispatcherRel int32, swapped, rever
 	return binary.LittleEndian.AppendUint32(thunk, uint32(dispatcherRel))
 }
 
-// emitNativeDispatcher preserves the Microsoft x64 argument registers and
-// nonvolatile registers around a callee. Its RIP displacements are derived
-// from the combined image offsets, so the emitted bytes remain position free.
-func emitNativeDispatcher(selfOff, loaderOff, ftOff uint32, swapped bool) []byte {
-	d := make([]byte, 0, 256)
-	put := func(v ...byte) { d = append(d, v...) }
-	rip := func(target uint32) {
-		rel := int64(target) - int64(selfOff) - int64(len(d)) - 4
-		d = binary.LittleEndian.AppendUint32(d, uint32(int32(rel)))
-	}
-	// Seven saves put RSP on a 16-byte boundary before the callee call.
-	put(0x53, 0x56, 0x57, 0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57)
-	put(0x48, 0x83, 0xec, 0x60)
-	put(0x48, 0x89, 0x4c, 0x24, 0x20) // save RCX
-	put(0x48, 0x89, 0x54, 0x24, 0x28) // save RDX
-	put(0x4c, 0x89, 0x44, 0x24, 0x30) // save R8
-	put(0x4c, 0x89, 0x4c, 0x24, 0x38) // save R9
-	put(0x48, 0x8d, 0x35)
-	rip(ftOff)
-	put(0x48, 0x83, 0xc6, 0x10) // RSI = first function entry
-	if swapped {
-		put(0x45, 0x89, 0xd4) // R12D = R10D = function ID
-	} else {
-		put(0x45, 0x89, 0xdc) // R12D = R11D = function ID
-	}
-	put(0x4d, 0x6b, 0xe4, 0x0c)             // R12 *= 12
-	put(0x49, 0x01, 0xf4)                   // R12 += RSI
-	put(0x45, 0x8b, 0x6c, 0x24, 0x00)       // R13D = entry offset
-	put(0x45, 0x8b, 0x74, 0x24, 0x04)       // R14D = entry size
-	put(0x45, 0x0f, 0xb6, 0x7c, 0x24, 0x08) // R15D = byte key
-	put(0x48, 0x8d, 0x05)
-	rip(loaderOff)                    // RAX = loader base
-	put(0x49, 0x89, 0xc4)             // R12 = loader base
-	put(0x4c, 0x01, 0xe8)             // RAX += R13 (section offset)
-	put(0x48, 0x89, 0xc7)             // RDI = section base
-	appendNativeXORLoop(&d)           // decrypt
-	put(0x48, 0x8b, 0x4c, 0x24, 0x20) // restore RCX
-	put(0x48, 0x8b, 0x54, 0x24, 0x28) // restore RDX
-	put(0x4c, 0x8b, 0x44, 0x24, 0x30) // restore R8
-	put(0x4c, 0x8b, 0x4c, 0x24, 0x38) // restore R9
-	put(0x4c, 0x89, 0xe0)             // RAX = loader base
-	if swapped {
-		put(0x4c, 0x01, 0xd8) // RAX += R11 target offset
-	} else {
-		put(0x4c, 0x01, 0xd0) // RAX += R10 target offset
-	}
-	put(0xff, 0xd0)                   // call RAX
-	put(0x48, 0x89, 0x44, 0x24, 0x40) // save return value
-	put(0x48, 0x89, 0xf8)             // RAX = RDI section base
-	appendNativeXORLoop(&d)           // re-encrypt
-	put(0x48, 0x8b, 0x44, 0x24, 0x40) // restore return value
-	put(0x48, 0x83, 0xc4, 0x60)
-	put(0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c, 0x5f, 0x5e, 0x5b, 0xc3)
-	return d
+// nativeDispatchEmitter writes x64 instructions while keeping entropy and
+// RIP-relative offsets tied to the final instruction positions.
+type nativeDispatchEmitter struct {
+	code    []byte
+	entropy io.Reader
+	err     error
+	selfOff uint32
 }
 
-func appendNativeXORLoop(d *[]byte) {
-	// ECX = section size; R15B is the key. Only volatile RCX/RAX change.
-	*d = append(*d, 0x44, 0x89, 0xf1)
-	top := len(*d)
-	*d = append(*d, 0x44, 0x30, 0x38)                // xor byte [rax], r15b
-	*d = append(*d, 0x48, 0xff, 0xc0)                // inc rax
-	*d = append(*d, 0xff, 0xc9)                      // dec ecx
-	*d = append(*d, 0x75, byte(int8(top-len(*d)-2))) // jnz top
+func (e *nativeDispatchEmitter) put(v ...byte) { e.code = append(e.code, v...) }
+
+func (e *nativeDispatchEmitter) randomByte() byte {
+	if e.err != nil {
+		return 0
+	}
+	var value [1]byte
+	_, e.err = io.ReadFull(e.entropy, value[:])
+	return value[0]
+}
+
+func (e *nativeDispatchEmitter) rip(target uint32) {
+	rel := int64(target) - int64(e.selfOff) - int64(len(e.code)) - 4
+	e.code = binary.LittleEndian.AppendUint32(e.code, uint32(int32(rel)))
+}
+
+// junk inserts 0..4 bytes from the x86 multi-byte NOP family. These NOPs do
+// not alter registers or flags, including at the gap before a loop JNZ.
+func (e *nativeDispatchEmitter) junk() { e.junkChoice(e.randomByte()) }
+
+func (e *nativeDispatchEmitter) junkChoice(choice byte) {
+	if choice&1 == 0 {
+		return
+	}
+	switch 1 + ((choice >> 1) & 3) {
+	case 1:
+		e.put(0x90)
+	case 2:
+		e.put(0x66, 0x90)
+	case 3:
+		if choice&0x10 != 0 {
+			e.put(0x0f, 0x1f, 0xc0)
+		} else {
+			e.put(0x0f, 0x1f, 0x00)
+		}
+	case 4:
+		e.put(0x0f, 0x1f, 0x40, choice)
+	}
+}
+
+func (e *nativeDispatchEmitter) push(reg byte) {
+	if reg < 8 {
+		e.put(0x50 + reg)
+	} else {
+		e.put(0x41, 0x50+reg-8)
+	}
+}
+
+func (e *nativeDispatchEmitter) pop(reg byte) {
+	if reg < 8 {
+		e.put(0x58 + reg)
+	} else {
+		e.put(0x41, 0x58+reg-8)
+	}
+}
+
+// The selected state registers are r12..r15. Mod=01 with disp8=0 avoids the
+// RIP-relative encoding for r13; r12 as a base requires an explicit SIB.
+func (e *nativeDispatchEmitter) stateLoad(dst, base, disp byte, zeroExtend bool) {
+	e.put(0x45)
+	if zeroExtend {
+		e.put(0x0f, 0xb6)
+	} else {
+		e.put(0x8b)
+	}
+	if base&7 == 4 {
+		e.put(0x40|(dst&7)<<3|4, 0x24, disp)
+	} else {
+		e.put(0x40|(dst&7)<<3|(base&7), disp)
+	}
+}
+
+// xorLoop toggles one protected section. Each invocation chooses its own
+// helper register, traversal direction, loop terminator, and NOP gaps.
+func (e *nativeDispatchEmitter) xorLoop(sizeReg, keyReg byte) {
+	helperRegs := [...]byte{1, 2, 3, 6, 8, 9} // rcx, rdx, rbx, rsi, r8, r9
+	helper := helperRegs[e.randomByte()%byte(len(helperRegs))]
+	reverse := e.randomByte()&1 != 0
+	addressLimit := e.randomByte()&1 != 0
+	var gap [4]byte
+	for i := range gap {
+		gap[i] = e.randomByte()
+	}
+	helperLow, sizeLow, keyLow := helper&7, sizeReg&7, keyReg&7
+	helperHigh := byte(0)
+	if helper >= 8 {
+		helperHigh = 1
+	}
+
+	if addressLimit && reverse {
+		// limit = base - 1, before RAX is moved to the final byte.
+		e.put(0x48|(helperHigh<<2), 0x8d, 0x40|(helperLow<<3), 0xff)
+	}
+	if reverse {
+		// RAX = base + size - 1.
+		e.put(0x4c, 0x01, 0xc0|(sizeLow<<3), 0x48, 0xff, 0xc8)
+	}
+	if addressLimit && !reverse {
+		// limit = base + size (REX.X extends the SIB index to r12..r15).
+		e.put(0x4a|(helperHigh<<2), 0x8d, 0x04|(helperLow<<3), sizeLow<<3)
+	}
+	if !addressLimit {
+		// Counter starts at size and decrements once for each XOR.
+		e.put(0x44|helperHigh, 0x89, 0xc0|(sizeLow<<3)|helperLow)
+	}
+
+	e.junkChoice(gap[0])
+	top := len(e.code)
+	e.put(0x44, 0x30, keyLow<<3) // XOR byte [RAX], keyRegB
+	e.junkChoice(gap[1])
+	if reverse {
+		e.put(0x48, 0xff, 0xc8)
+	} else {
+		e.put(0x48, 0xff, 0xc0)
+	}
+	e.junkChoice(gap[2])
+	if addressLimit {
+		e.put(0x48|(helperHigh<<2), 0x39, 0xc0|(helperLow<<3)) // CMP RAX, helper
+	} else {
+		if helperHigh != 0 {
+			e.put(0x41)
+		}
+		e.put(0xff, 0xc8|helperLow) // DEC helper
+	}
+	e.junkChoice(gap[3])
+	rel := top - len(e.code) - 2
+	if rel < -128 || rel > 127 {
+		e.err = fmt.Errorf("dispatcher XOR loop exceeds rel8 range")
+		return
+	}
+	e.put(0x75, byte(int8(rel)))
+}
+
+// emitNativeDispatcher preserves Microsoft x64 argument/nonvolatile registers.
+// The four state roles and seven saved-register positions vary per output.
+func emitNativeDispatcher(selfOff, loaderOff, ftOff uint32, swapped bool, entropy io.Reader) ([]byte, error) {
+	if entropy == nil {
+		return nil, fmt.Errorf("missing dispatcher entropy source")
+	}
+	e := nativeDispatchEmitter{code: make([]byte, 0, dispatchSlotSize), entropy: entropy, selfOff: selfOff}
+	roles := [4]byte{12, 13, 14, 15} // table pointer, offset, size, key
+	for i := len(roles) - 1; i > 0; i-- {
+		j := int(e.randomByte()) % (i + 1)
+		roles[i], roles[j] = roles[j], roles[i]
+	}
+	ptr, off, size, key := roles[0], roles[1], roles[2], roles[3]
+	ptrLow, offLow := ptr&7, off&7
+	saveOrder := [7]byte{3, 6, 7, 12, 13, 14, 15}
+	for i := len(saveOrder) - 1; i > 0; i-- {
+		j := int(e.randomByte()) % (i + 1)
+		saveOrder[i], saveOrder[j] = saveOrder[j], saveOrder[i]
+	}
+	// Seven pushes take entry RSP from 8 mod 16 to 0 mod 16. The frame
+	// reserves 32-byte shadow space and spills the four register arguments.
+	for i, reg := range saveOrder {
+		e.push(reg)
+		if i < len(saveOrder)-1 {
+			e.junk()
+		}
+	}
+	e.put(0x48, 0x83, 0xec, 0x60)
+	e.put(0x48, 0x89, 0x4c, 0x24, 0x20) // save RCX
+	e.junk()
+	e.put(0x48, 0x89, 0x54, 0x24, 0x28) // save RDX
+	e.junk()
+	e.put(0x4c, 0x89, 0x44, 0x24, 0x30) // save R8
+	e.junk()
+	e.put(0x4c, 0x89, 0x4c, 0x24, 0x38) // save R9
+	e.put(0x48, 0x8d, 0x35)
+	e.rip(ftOff)
+	e.put(0x48, 0x83, 0xc6, 0x10) // RSI = first table entry
+	e.junk()
+	idSrc := byte(3)     // r11d
+	targetSrc := byte(2) // r10
+	if swapped {
+		idSrc, targetSrc = targetSrc, idSrc
+	}
+	e.put(0x45, 0x89, 0xc0|(idSrc<<3)|ptrLow) // PTR_d = function ID
+	e.junk()
+	e.put(0x4d, 0x6b, 0xc0|(ptrLow<<3)|ptrLow, 0x0c) // PTR *= 12
+	e.junk()
+	e.put(0x49, 0x01, 0xc0|(6<<3)|ptrLow) // PTR += RSI
+	e.junk()
+	e.stateLoad(off, ptr, 0, false)
+	e.junk()
+	e.stateLoad(size, ptr, 4, false)
+	e.junk()
+	e.stateLoad(key, ptr, 8, true)
+	e.junk()
+	e.put(0x48, 0x8d, 0x05)
+	e.rip(loaderOff)               // RAX = loader base
+	e.put(0x49, 0x89, 0xc0|ptrLow) // PTR = loader base
+	e.junk()
+	e.put(0x4c, 0x01, 0xc0|(offLow<<3)) // RAX += section offset
+	e.put(0x48, 0x89, 0xc7)             // RDI = section base
+	e.xorLoop(size, key)                // decrypt
+	e.put(0x48, 0x8b, 0x4c, 0x24, 0x20) // restore RCX
+	e.junk()
+	e.put(0x48, 0x8b, 0x54, 0x24, 0x28) // restore RDX
+	e.junk()
+	e.put(0x4c, 0x8b, 0x44, 0x24, 0x30) // restore R8
+	e.junk()
+	e.put(0x4c, 0x8b, 0x4c, 0x24, 0x38) // restore R9
+	e.junk()
+	e.put(0x4c, 0x89, 0xc0|(ptrLow<<3)) // RAX = loader base
+	e.junk()
+	e.put(0x4c, 0x01, 0xc0|(targetSrc<<3)) // RAX += target offset
+	e.junk()
+	e.put(0xff, 0xd0)                   // call RAX
+	e.put(0x48, 0x89, 0x44, 0x24, 0x40) // save return value
+	e.put(0x48, 0x89, 0xf8)             // RAX = section base
+	e.xorLoop(size, key)                // re-encrypt, independently varied
+	e.put(0x48, 0x8b, 0x44, 0x24, 0x40) // restore return value
+	e.put(0x48, 0x83, 0xc4, 0x60)
+	for i := len(saveOrder) - 1; i >= 0; i-- {
+		e.pop(saveOrder[i])
+		if i > 0 {
+			e.junk()
+		}
+	}
+	e.put(0xc3)
+	if e.err != nil {
+		return nil, fmt.Errorf("emit dispatcher: %w", e.err)
+	}
+	if len(e.code) > dispatchSlotSize {
+		return nil, fmt.Errorf("dispatch code exceeds reserved slot: %d", len(e.code))
+	}
+	return e.code, nil
 }

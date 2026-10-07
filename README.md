@@ -55,6 +55,9 @@ flags expose the shared loader and native PE options. See
 [`cmd/churro-gen/README.md`](cmd/churro-gen/README.md) for the full CLI
 reference, including compatibility aliases and custom loader bundles.
 
+The CLI defaults to aPLib compression, matching Fritter's native CLI. The Go
+API's zero-value `CompressionNone` leaves payload bytes uncompressed.
+
 To produce a loader that downloads its module, supply a base URL. The CLI
 writes the opaque staged module beside the loader using its generated name, or
 to the path selected by `-module-output`. Host that module at the URL formed
@@ -97,8 +100,10 @@ build constants and code images.
 
 The checked-in MinGW loader has six code sections and a metadata table for
 cross-section calls. Churro's Go generator rewrites protected calls through
-dispatch thunks and encrypts five sections independently. Each output varies
-its entry prefix, stack setup, decoder, trampoline, keys, and dispatch layout.
+dispatch thunks and encrypts four sections independently. The hash section
+stays resident because host continuation can call it from two threads. Each
+output varies its entry prefix, stack setup, decoder, trampoline, keys, and
+dispatch layout.
 The native bundle remains a separate build input, so build-level cipher/hash
 and API variations require a loader rebuild with `--rotate`.
 

@@ -11,8 +11,36 @@ permissions:
   contents: read
 
 jobs:
+  rotated-bundle:
+    name: Build rotated native loader bundle
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install x64 MinGW compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+      - name: Build bundle with rotated Poly and API constants
+        run: |
+          ./scripts/rebuild-loader-blobs.sh --rotate --seed 0x12345678 --output-dir "$RUNNER_TEMP/churro-rotated-bundle"
+          ! cmp -s "$RUNNER_TEMP/churro-rotated-bundle/poly_seed.h" internal/assets/poly_seed.h
+          ! cmp -s "$RUNNER_TEMP/churro-rotated-bundle/api_shuffle.h" internal/assets/api_shuffle.h
+      - uses: actions/upload-artifact@v4
+        with:
+          name: churro-rotated-loader-bundle
+          path: ${{ runner.temp }}/churro-rotated-bundle/
+          if-no-files-found: error
+
   libraries:
     name: Windows payload formats and staging
+    needs: rotated-bundle
     runs-on: windows-2022
     timeout-minutes: 40
     steps:
@@ -23,11 +51,15 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: churro-rotated-loader-bundle
+          path: ${{ runner.temp }}/churro-rotated-bundle
       - name: Test Go packages
         run: go test ./...
       - name: Generate and execute Windows payload loaders
         shell: pwsh
-        run: ./scripts/test-windows-e2e.ps1
+        run: ./scripts/test-windows-e2e.ps1 -LoaderBundleDirectory "$env:RUNNER_TEMP\churro-rotated-bundle"
 
   sliver-session:
     name: Generated Sliver DLL opens a session

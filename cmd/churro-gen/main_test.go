@@ -100,6 +100,20 @@ func TestCLIArgumentErrors(t *testing.T) {
 	}
 }
 
+func TestCLIHelpExitsSuccessfully(t *testing.T) {
+	for _, arg := range []string{"-h", "--help"} {
+		t.Run(arg, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{arg}, &stdout, &stderr); code != 0 {
+				t.Fatalf("help exit = %d, stderr=%q", code, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "-input") || !strings.Contains(stderr.String(), "-compression") {
+				t.Fatalf("help output omits CLI options: %q", stderr.String())
+			}
+		})
+	}
+}
+
 func TestStagingForFlags(t *testing.T) {
 	if _, err := stagingForFlags("", "PAYLOAD", ""); err == nil {
 		t.Fatal("module name accepted without a server")

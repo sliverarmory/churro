@@ -41,7 +41,7 @@ func TestLoaderLayoutAndDecoderTargets(t *testing.T) {
 	}
 	protectedRefs := 0
 	for _, ref := range meta.References {
-		if meta.Functions[ref.TargetFn].Name != ".text" {
+		if !residentLoaderFunction(meta.Functions[ref.TargetFn]) {
 			protectedRefs++
 		}
 	}
@@ -73,10 +73,10 @@ func TestLoaderLayoutAndDecoderTargets(t *testing.T) {
 		if got := binary.LittleEndian.Uint32(entry[4:8]); got != fn.Size {
 			t.Fatalf("function %d size=%d, want %d", i, got, fn.Size)
 		}
-		if fn.Name == ".text" && (entry[8] != 0 || entry[9] != 1) {
-			t.Fatal("resident .text has incorrect dispatch flags")
+		if residentLoaderFunction(fn) && (entry[8] != 0 || entry[9] != 1) {
+			t.Fatalf("resident function %q has incorrect dispatch flags", fn.Name)
 		}
-		if fn.Name != ".text" && (entry[8] == 0 || entry[9] != 0) {
+		if !residentLoaderFunction(fn) && (entry[8] == 0 || entry[9] != 0) {
 			t.Fatalf("protected function %d has incorrect key or flags", i)
 		}
 	}

@@ -11,8 +11,9 @@ Output formats are `bin`, `base64`, `c`, `ruby`, `python`, `powershell`,
 `csharp`, `hex`, and `uuid`, with Fritter-compatible numeric values 1 through
 9. Without `-output`, the CLI chooses `loader.bin`, `loader.b64`, `loader.c`,
 `loader.rb`, `loader.py`, `loader.ps1`, `loader.cs`, `loader.hex`, or
-`loader.uuid` according to the format. `-compression aplib` enables the Go
-aPLib packer; the default leaves module bytes uncompressed.
+`loader.uuid` according to the format. The CLI uses the Go aPLib packer by
+default, matching Fritter's native CLI; `-compression none` leaves module bytes
+uncompressed. The Go API retains its zero-value `CompressionNone` default.
 
 For HTTP staging, set `-server` to an HTTP or HTTPS base URL and optionally
 set `-modname` to an eight-byte-or-shorter module filename. The CLI writes the
@@ -73,14 +74,15 @@ function tables and uses hash placeholders, so it is not a usable manifest:
 }
 ```
 
-The real API list must include each loader API exactly once, in the order
-compiled into the native image. `LoadLibraryA` occupies the first slot. The
-Poly constants must likewise come from the same native build. The SHA-256
-fields bind the manifest to the three image files; they cannot prove that an
-opaque native image was compiled with the claimed constants. Generate the
-manifest alongside the images with `make loader-assets` in a matching Churro
-source tree, and keep those four files together. The generated manifest in
-`internal/assets/bundle.json` is a complete example.
+The real API list must contain exactly the 61 module/export pairs in the
+embedded bundle, in the order compiled into the native image. Custom bundles
+may reorder those pairs but cannot add or remove imports. `LoadLibraryA`
+occupies the first slot. The Poly constants must likewise come from the same
+native build. The SHA-256 fields bind the manifest to the three image files;
+they cannot prove that an opaque native image was compiled with the claimed
+constants. Generate the manifest alongside the images with `make loader-assets`
+in a matching Churro source tree, and keep those four files together. The
+generated `internal/assets/bundle.json` is a complete example.
 
 Multi-section images list every extracted function and cross-section
 reference in their respective metadata tables. Each reference has
