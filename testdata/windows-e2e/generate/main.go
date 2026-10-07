@@ -14,9 +14,19 @@ func main() {
 	dll := flag.String("dll", "", "path to a native x64 Windows DLL")
 	export := flag.String("export", "", "parameterless export to invoke")
 	out := flag.String("out", "", "path for raw shellcode")
+	headers := flag.String("headers", "overwrite", "PE header handling: overwrite or preserve")
 	flag.Parse()
 	if *dll == "" || *export == "" || *out == "" {
 		fatalf("-dll, -export, and -out are required")
+	}
+	var peHeaders churro.PEHeaders
+	switch *headers {
+	case "overwrite":
+		peHeaders = churro.PEHeadersOverwrite
+	case "preserve":
+		peHeaders = churro.PEHeadersPreserve
+	default:
+		fatalf("invalid -headers value %q", *headers)
 	}
 	image, err := os.ReadFile(*dll)
 	if err != nil {
@@ -28,6 +38,7 @@ func main() {
 		Payload: churro.NativeDLL{
 			Image:  image,
 			Export: &churro.NativeDLLExport{Name: *export},
+			PE:     churro.NativePEConfig{Headers: peHeaders},
 		},
 	})
 	if err != nil {

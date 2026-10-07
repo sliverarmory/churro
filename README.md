@@ -8,9 +8,10 @@ used by [Fritter's Go API](https://github.com/sliverarmory/Fritter).
 The generator and CLI are Go code and do not use cgo. Like
 [Malasada](https://github.com/sliverarmory/malasada) and
 [Beignet](https://github.com/sliverarmory/beignet), Churro embeds checked-in
-native loader blobs. The current blobs came from Fritter's MinGW build at
+native loader blobs. They are built from Fritter source at
 [`ff952a22`](https://github.com/sliverarmory/Fritter/commit/ff952a22b1cf06d41b3781ab7c20f608b9754e53)
-and execute as native code inside a Windows process. Go consumers do not need
+with a local TLS callback fix, and execute as native code inside a Windows
+process. Go consumers do not need
 a C compiler, Zig, WebAssembly, or a sidecar executable.
 
 ## Build
@@ -22,10 +23,12 @@ make build
 make test
 ```
 
-The checked-in loader blobs are build inputs. Churro does not yet provide a
-reproducible blob regeneration command. Changes to the native loader currently
-require rebuilding those assets in Fritter. Zig is a possible compiler for a
-future in-repo regeneration path, but is not used by this build.
+The checked-in loader blobs are build inputs. To regenerate them from the
+pinned source in this repository, install a host C compiler and an x64 MinGW
+cross compiler, then run `make loader-assets`. Rebuilding is deterministic
+with the pinned headers and toolchain described in
+[`internal/loader/README.md`](internal/loader/README.md). Zig is optional and
+is not used in the tested rebuild path. Normal Go builds need neither compiler.
 
 The generated CLI accepts Windows x64 `.exe` and `.dll` images, plus `.vbs`
 and `.js` source. Native and managed PE inputs are selected from the PE
@@ -88,10 +91,15 @@ stack alignment, and trampoline instruction forms are simpler than Fritter's
 per-output polymorphic forms. This is a functional generator port, not full
 polymorphic parity with a newly built Fritter binary.
 
+Execute the returned bytes from a page-aligned allocation. The embedded shim
+and native loader are laid out on 4 KiB boundaries relative to the beginning
+of that allocation. The Windows test runner uses `VirtualAlloc` for this.
+
 ## Verification
 
 `go test ./...` checks request validation, blob generation, and output
 formats. Native shellcode execution requires a Windows x64 host. On Windows,
 `scripts/test-windows-e2e.ps1` builds native and Go test DLLs, executes
-generated loaders, and checks their marker files. GitHub Actions runs that
-harness on a Windows runner.
+generated loaders, and checks TLS, DLL entry, export, and import behavior.
+The Windows GitHub Actions workflow also generates a Sliver shared library,
+runs its Churro loader, and requires a matching session-open event.

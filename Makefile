@@ -1,17 +1,20 @@
 GO ?= go
 OUT ?= churro-gen
 
-.PHONY: all build test clean
+.PHONY: all build test loader-assets clean
 
 all: build
 
-# The generator itself does not use cgo. The checked-in loader blobs were built
-# by Fritter's MinGW build and are already embedded by the Go package.
+# The generator itself does not use cgo. Native loader images are checked in.
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -o $(OUT) ./cmd/churro-gen
 
 test:
 	$(GO) test ./...
+
+# Requires a host C compiler and an x64 MinGW cross compiler.
+loader-assets:
+	./scripts/rebuild-loader-blobs.sh
 
 clean:
 	rm -f $(OUT)

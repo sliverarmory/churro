@@ -53,14 +53,14 @@ func TestLoaderLayoutAndDecoderTargets(t *testing.T) {
 		t.Fatal("dispatch key does not reveal selected loader image")
 	}
 	decoderAt := prefix + 5 + len(instance) + 1 + 22 // fixed RSP entry
-	if result[decoderAt] != 0x51 || result[decoderAt+1] != 0x48 {
+	if !bytes.Equal(result[decoderAt:decoderAt+5], []byte{0x53, 0x56, 0x57, 0x51, 0x48}) {
 		t.Fatal("decoder does not begin at the expected entry")
 	}
-	keyTarget := decoderAt + 8 + int(binary.LittleEndian.Uint32(result[decoderAt+4:decoderAt+8]))
+	keyTarget := decoderAt + 11 + int(binary.LittleEndian.Uint32(result[decoderAt+7:decoderAt+11]))
 	if !bytes.Equal(result[keyTarget:keyTarget+4], bytes.Repeat([]byte{seed}, 4)) {
 		t.Fatal("decoder key RIP displacement is wrong")
 	}
-	dataTarget := decoderAt + 15 + int(binary.LittleEndian.Uint32(result[decoderAt+11:decoderAt+15]))
+	dataTarget := decoderAt + 18 + int(binary.LittleEndian.Uint32(result[decoderAt+14:decoderAt+18]))
 	if dataTarget != combinedAt {
 		t.Fatalf("decoder data target %d, want %d", dataTarget, combinedAt)
 	}

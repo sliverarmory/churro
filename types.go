@@ -1,4 +1,4 @@
-// Package churro generates 64-bit Windows loaders in-process using a
+// Package churro generates 64-bit Windows loaders in-process using an
 // embedded Windows loader. The package accepts and returns bytes; it never
 // reads or writes host files.
 package churro
@@ -146,7 +146,8 @@ type JScript struct {
 func (JScript) churroPayload() {}
 
 // Result contains the generated loader and, for staged generation, its module.
-// Returned byte slices are owned by the caller.
+// Returned byte slices are owned by the caller. Binary loader bytes must be
+// executed from a page-aligned allocation.
 type Result struct {
 	Loader       []byte
 	StagedModule *StagedModule

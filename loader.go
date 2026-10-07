@@ -105,11 +105,11 @@ func makeDecoder(combinedSize uint32, key []byte) ([]byte, decoderFixups, error)
 		return nil, decoderFixups{}, fmt.Errorf("invalid decoder key length %d", len(key))
 	}
 	// Windows x64: RSI=key, RDI=encoded data, ECX=count, BL=key index.
-	// Preserve RCX while it carries the instance pointer into the shim.
-	d := []byte{0x51, 0x48, 0x8d, 0x35, 0, 0, 0, 0}
-	f := decoderFixups{keyDisp: 4, keyEnd: 8}
+	// Preserve the nonvolatile registers and the instance pointer in RCX.
+	d := []byte{0x53, 0x56, 0x57, 0x51, 0x48, 0x8d, 0x35, 0, 0, 0, 0}
+	f := decoderFixups{keyDisp: 7, keyEnd: 11}
 	d = append(d, 0x48, 0x8d, 0x3d, 0, 0, 0, 0)
-	f.dataDisp, f.dataEnd = 11, 15
+	f.dataDisp, f.dataEnd = 14, 18
 	d = append(d, 0xb9)
 	d = binary.LittleEndian.AppendUint32(d, combinedSize)
 	d = append(d, 0x31, 0xdb) // xor ebx,ebx
@@ -129,7 +129,7 @@ func makeDecoder(combinedSize uint32, key []byte) ([]byte, decoderFixups, error)
 		return nil, decoderFixups{}, fmt.Errorf("decoder loop exceeds rel8 range")
 	}
 	d[jnzNext-1] = byte(int8(rel))
-	d = append(d, 0x59, 0xeb, byte(len(key))) // pop rcx; skip key
+	d = append(d, 0x59, 0x5f, 0x5e, 0x5b, 0xeb, byte(len(key))) // restore registers; skip key
 	f.keyStart = len(d)
 	d = append(d, key...)
 	return d, f, nil
