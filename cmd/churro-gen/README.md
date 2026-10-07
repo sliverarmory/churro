@@ -23,8 +23,10 @@ On Windows, the CLI also attempts to copy Base64 output to the clipboard as
 CF_TEXT, matching Fritter's native CLI. Clipboard access is best effort; the
 selected output file and command result do not depend on it. Other formats do
 not change the clipboard. On success, the CLI prints the selected input,
-output format and path, staging, compression, exit mode, OEP when selected,
-and protection settings alongside its `wrote` lines.
+payload type and named DLL invocation, output format and path, staging URL,
+compression, exit mode, OEP when selected, and protection settings alongside
+its `wrote` lines. The report omits Basic Authentication credentials and
+argument text.
 
 For HTTP staging, set `-server` to an HTTP or HTTPS base URL and optionally
 set `-modname` to an eight-byte-or-shorter module filename. The CLI writes the

@@ -62,6 +62,8 @@ execution evidence is recorded below.
 - [x] Honor context cancellation during compression, encryption, loader
   assembly, and output formatting, and let `Close` finish promptly after a
   canceled generation; deterministic unit and race tests passed.
+- [x] Include payload type, native or managed invocation, and the complete
+  credential-free staged URL in the CLI success report; focused Go tests pass.
 
 Churro wraps invalid generation inputs in `GenerationError` so callers can use
 stable codes. The underlying `ValidationError` remains available through
@@ -77,10 +79,14 @@ stable codes. The underlying `ValidationError` remains available through
 - [x] Add aPLib-compatible payload compression in the Go generator; Go tests
   round-trip packed data through `referenceDepack`, and Windows execution tests
   exercise the native C loader's depacker. Keep source provenance clear.
-- [x] Support per-function encrypted dispatch: the embedded MinGW images have
+- [x] Support section-granular encrypted dispatch: the embedded MinGW images have
   six sections and 62 cross-section references per PEB variant. Four helper
   sections are protected; `.text` and the hash section stay resident for
   host-continuation concurrency. Static thunk and function-table tests pass.
+- [ ] Protect the hash-resolver section with concurrency-safe dispatch, matching
+  Fritter's native MSVC protection policy. The current XOR-on-entry dispatcher
+  can corrupt an executing section if another thread toggles it, so this
+  requires synchronized section entry and exit plus Windows stress coverage.
 - [x] Vary N>1 dispatcher state registers, save order, inert instructions,
   and independent XOR-loop forms per output, matching Fritter's emitter axes.
 

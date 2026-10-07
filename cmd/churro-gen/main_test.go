@@ -221,6 +221,7 @@ func TestCLIStagedModuleDefaultsToCurrentDirectory(t *testing.T) {
 		t.Fatalf("stdout=%q", stdout.String())
 	}
 	if !strings.Contains(stdout.String(), "Staging      HTTPS (module PAYLOAD)") ||
+		!strings.Contains(stdout.String(), "URL          https://example.test/modules/PAYLOAD") ||
 		!strings.Contains(stdout.String(), "Instance     HTTP") {
 		t.Fatalf("incomplete staged report: %q", stdout.String())
 	}
@@ -261,6 +262,28 @@ func TestCLIStagedModuleDefaultsToCurrentDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(failedLoader); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("loader exists after failed module write: %v", err)
+	}
+}
+
+func TestCLIStagedSummaryReportsURLWithoutCredentials(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "payload.vbs")
+	if err := os.WriteFile(input, []byte(`WScript.Echo "hello"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-input", input, "-output", filepath.Join(dir, "loader.bin"),
+		"-module-output", filepath.Join(dir, "module.bin"),
+		"-server", "https://operator:private@example.test/modules/",
+		"-modname", "PAYLOAD", "-compression", "none",
+	}, &stdout, &stderr)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "URL          https://example.test/modules/PAYLOAD") ||
+		strings.Contains(stdout.String(), "operator") || strings.Contains(stdout.String(), "private") {
+		t.Fatalf("staged URL report exposes credentials or omits destination: %q", stdout.String())
 	}
 }
 
@@ -340,12 +363,13 @@ func TestValidateOutputTargetsRejectsAliases(t *testing.T) {
 
 func TestGenerationSummarySelectedOptions(t *testing.T) {
 	var out bytes.Buffer
-	printGenerationSummary(&out, "source.dll", "loader.uuid", "", churro.NativeDLL{}, nil,
+	printGenerationSummary(&out, "source.dll", "loader.uuid", "", "", churro.NativeDLL{}, nil,
 		churro.FormatUUID, churro.EntropyDefault, churro.CompressionAPLib,
 		churro.ExitProcess, churro.PEHeadersPreserve,
 		&churro.HostImageContinuation{EntryPointRVA: 0x1a2b})
 	for _, line := range []string{
-		"Input        source.dll", "Output       loader.uuid (uuid)",
+		"Input        source.dll", "Type         Native DLL", "Function     DllMain",
+		"Output       loader.uuid (uuid)",
 		"Compression  aPLib", "Exit         Process", "OEP          0x1A2B",
 		"ARX encryption", "PE headers preserve",
 	} {
@@ -356,7 +380,7 @@ func TestGenerationSummarySelectedOptions(t *testing.T) {
 	out.Reset()
 	staging := &churro.HTTPStaging{}
 	staging.BaseURL.Scheme = "https"
-	printGenerationSummary(&out, "source.vbs", "loader.bin", "PAYLOAD", churro.VBScript{}, staging,
+	printGenerationSummary(&out, "source.vbs", "loader.bin", "PAYLOAD", "https://example.test/modules/PAYLOAD", churro.VBScript{}, staging,
 		churro.FormatBinary, churro.EntropyNone, churro.CompressionNone,
 		churro.ExitBlock, churro.PEHeadersOverwrite, nil)
 	for _, line := range []string{"Staging      HTTPS (module PAYLOAD)", "Compression  None", "Exit         Block"} {
@@ -366,6 +390,22 @@ func TestGenerationSummarySelectedOptions(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "ARX encryption") || strings.Contains(out.String(), "PE headers") {
 		t.Fatalf("summary reported inapplicable protection: %q", out.String())
+	}
+	out.Reset()
+	managed := churro.DotNetDLL{
+		EntryPoint: churro.DotNetStaticMethod{TypeName: "Fixture.Entry", MethodName: "Run"},
+		Runtime:    churro.DotNetRuntime{AppDomain: "FixtureDomain"},
+	}
+	printGenerationSummary(&out, "source.dll", "loader.bin", "", "", managed, nil,
+		churro.FormatBinary, churro.EntropyDefault, churro.CompressionNone,
+		churro.ExitThread, churro.PEHeadersOverwrite, nil)
+	for _, line := range []string{
+		"Type         Managed DLL", "Class        Fixture.Entry",
+		"Method       Run", "Domain       FixtureDomain",
+	} {
+		if !strings.Contains(out.String(), line) {
+			t.Fatalf("managed summary missing %q: %q", line, out.String())
+		}
 	}
 }
 

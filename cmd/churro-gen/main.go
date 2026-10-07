@@ -239,24 +239,55 @@ func runWithClipboard(args []string, stdout, stderr io.Writer, copyClipboard fun
 	if staging != nil {
 		fmt.Fprintf(stdout, "wrote staged module %s (%d bytes)\n", stagedPath, len(result.StagedModule.Data))
 	}
-	printGenerationSummary(stdout, *input, outputPath, stagedPath, payload, staging,
+	stagedURL := ""
+	if result.StagedModule != nil {
+		moduleURL := result.StagedModule.URL
+		moduleURL.User = nil // Do not print Basic Authentication credentials.
+		stagedURL = moduleURL.String()
+	}
+	printGenerationSummary(stdout, *input, outputPath, stagedPath, stagedURL, payload, staging,
 		format, entropy, compression, exit, headers, continuation)
 	return 0
 }
 
-func printGenerationSummary(out io.Writer, input, output, stagedPath string,
+func printGenerationSummary(out io.Writer, input, output, stagedPath, stagedURL string,
 	payload churro.Payload, staging *churro.HTTPStaging, format churro.Format, entropy churro.Entropy,
 	compression churro.Compression, exit churro.ExitBehavior, headers churro.PEHeaders,
 	continuation *churro.HostImageContinuation) {
 	formatNames := [...]string{"bin", "base64", "c", "ruby", "python", "powershell", "csharp", "hex", "uuid"}
 	fmt.Fprintln(out, "SUCCESS: Shellcode generated.")
 	fmt.Fprintf(out, "  Input        %s\n", input)
+	switch selected := payload.(type) {
+	case churro.NativeExecutable:
+		fmt.Fprintln(out, "  Type         Native EXE")
+	case churro.NativeDLL:
+		fmt.Fprintln(out, "  Type         Native DLL")
+		name := "DllMain"
+		if selected.Export != nil {
+			name = selected.Export.Name
+		}
+		fmt.Fprintf(out, "  Function     %s\n", name)
+	case churro.DotNetExecutable:
+		fmt.Fprintln(out, "  Type         Managed EXE")
+	case churro.DotNetDLL:
+		fmt.Fprintln(out, "  Type         Managed DLL")
+		fmt.Fprintf(out, "  Class        %s\n", selected.EntryPoint.TypeName)
+		fmt.Fprintf(out, "  Method       %s\n", selected.EntryPoint.MethodName)
+		if selected.Runtime.AppDomain != "" {
+			fmt.Fprintf(out, "  Domain       %s\n", selected.Runtime.AppDomain)
+		}
+	case churro.VBScript:
+		fmt.Fprintln(out, "  Type         VBScript")
+	case churro.JScript:
+		fmt.Fprintln(out, "  Type         JScript")
+	}
 	fmt.Fprintf(out, "  Output       %s (%s)\n", output, formatNames[format])
 	if staging == nil {
 		fmt.Fprintln(out, "  Staging      Disabled")
 		fmt.Fprintln(out, "  Instance     Embedded")
 	} else {
 		fmt.Fprintf(out, "  Staging      %s (module %s)\n", strings.ToUpper(staging.BaseURL.Scheme), stagedPath)
+		fmt.Fprintf(out, "  URL          %s\n", stagedURL)
 		fmt.Fprintln(out, "  Instance     HTTP")
 	}
 	if compression == churro.CompressionAPLib {
