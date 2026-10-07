@@ -48,9 +48,26 @@ rebuild passed. Windows execution evidence is recorded below.
   staged-module placement where compatibility is useful; document any
   deliberate default differences.
 
-The CLI does not copy Base64 output to the Windows clipboard automatically.
-Fritter does this as a convenience side effect; Churro writes the same encoded
-output to its selected file.
+- [ ] Copy Base64 CLI output to the Windows clipboard as CF_TEXT on a best-effort
+  basis, matching Fritter's convenience side effect. The pure Go implementation
+  and focused CLI tests are in the working tree; Windows clipboard readback and
+  a committed implementation remain to be verified.
+- [ ] Default staged-module output to the process working directory, matching
+  Fritter even when the loader output is in another directory. Write the module
+  before the loader and print a concise native-compatible success report. The
+  CLI changes and focused tests are in the working tree; a committed
+  implementation remains to be verified.
+- [ ] Reject loader or staged-module output paths that alias the input or each
+  other, including symlinks, hard links, and Windows case variants. Focused
+  tests pass locally; the fix remains to be committed.
+- [ ] Honor context cancellation during compression, encryption, loader
+  assembly, and output formatting, and let `Close` finish promptly after a
+  canceled generation. Deterministic local tests and race tests pass; the
+  implementation remains to be committed.
+
+Churro wraps invalid generation inputs in `GenerationError` so callers can use
+stable codes. The underlying `ValidationError` remains available through
+`errors.As`; Fritter returns it directly at the top level.
 
 ## 2. Shellcode generation parity
 
@@ -59,10 +76,11 @@ output to its selected file.
   calling convention; structural and variant tests pass.
 - [x] Regenerate build-specific cipher/hash constants and API table ordering,
   with a manifest tying the Go serializer to both native loader images.
-- [x] Add aPLib-compatible payload compression in the Go generator; a native C
-  depacker fixture and Go round-trip tests pass. Keep source provenance clear.
+- [x] Add aPLib-compatible payload compression in the Go generator; Go tests
+  round-trip packed data through `referenceDepack`, and Windows execution tests
+  exercise the native C loader's depacker. Keep source provenance clear.
 - [x] Support per-function encrypted dispatch: the embedded MinGW images have
-  six sections and 61 cross-section references per PEB variant. Four helper
+  six sections and 62 cross-section references per PEB variant. Four helper
   sections are protected; `.text` and the hash section stay resident for
   host-continuation concurrency. Static thunk and function-table tests pass.
 - [x] Vary N>1 dispatcher state registers, save order, inert instructions,
@@ -89,9 +107,14 @@ output to its selected file.
   Windows after the native dispatch change.
 - [x] Execute `ExitProcess` and `ExitBlock` as bounded CLI cases with markers.
 - [x] Execute native DLL loaders with `EntropyNone` and `EntropyNames`.
+- [ ] Execute a native DLL ANSI export argument containing non-ASCII text under
+  the Windows ANSI code page after the native loader rebuild; local source and
+  wire tests do not establish Windows runtime behavior.
+- [ ] Re-run the full Windows payload, CLR v2, custom-bundle, and clipboard
+  checks at the commit containing the rebuilt native loader images.
 - [x] Stress public generator reuse, concurrency, output uniqueness, and
   staged-request immutability.
-- [x] Repeat the generated Sliver session check after all loader changes and
+- [ ] Repeat the generated Sliver session check after all loader changes and
   require a matching `SessionOpenedEvent` plus `GetSessions` entry.
 
 ## 4. Distribution
@@ -103,7 +126,7 @@ output to its selected file.
   sidecars, and SHA-256 checksums; all 11 were independently checked.
 - [ ] Publish and verify a tagged GitHub release from the final tested commit.
 
-## Completion evidence
+## Previous green checkpoint
 
 The implementation commit is `dfff600419af817798894ee9a7df570b60225b93`.
 Its [Windows payload job](https://github.com/sliverarmory/churro/actions/runs/37567275171/job/112617978831)
@@ -125,5 +148,7 @@ observed `SessionOpenedEvent` ID
 `1a2b074b-50e3-4df6-a3b9-de131552222b` on mTLS and confirmed the same
 session in `GetSessions`.
 
-Tagged-release publication remains pending; no release tag or release assets
-have been published.
+The new ANSI loader, cancellation, and CLI parity changes pass local unit,
+race, and vet checks. Their final Windows Actions and Sliver execution evidence
+remains pending. Tagged-release publication also remains pending; no release
+tag or release assets have been published.

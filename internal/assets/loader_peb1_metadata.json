@@ -2,7 +2,7 @@
   "functions": [
     {
       "offset": 0,
-      "size": 11328,
+      "size": 11520,
       "single_page": false,
       "name": ".text"
     },
@@ -13,7 +13,7 @@
       "name": ".main_pr"
     },
     {
-      "offset": 11328,
+      "offset": 11520,
       "size": 60,
       "single_page": true,
       "name": ".ansi2un"
@@ -25,13 +25,13 @@
       "name": ".hash_ch"
     },
     {
-      "offset": 11388,
+      "offset": 11580,
       "size": 504,
       "single_page": true,
       "name": ".aP_depa"
     },
     {
-      "offset": 11892,
+      "offset": 15252,
       "size": 384,
       "single_page": true,
       "name": ".cipher"
@@ -193,35 +193,42 @@
       "target_fn": 3
     },
     {
-      "src_blob_off": 6834,
+      "src_blob_off": 6850,
       "inst_length": 5,
       "disp_offset": 1,
       "src_fn": 0,
       "target_fn": 2
     },
     {
-      "src_blob_off": 6908,
+      "src_blob_off": 6883,
       "inst_length": 5,
       "disp_offset": 1,
       "src_fn": 0,
       "target_fn": 2
     },
     {
-      "src_blob_off": 7802,
+      "src_blob_off": 7081,
+      "inst_length": 5,
+      "disp_offset": 1,
+      "src_fn": 0,
+      "target_fn": 2
+    },
+    {
+      "src_blob_off": 7975,
       "inst_length": 5,
       "disp_offset": 1,
       "src_fn": 0,
       "target_fn": 3
     },
     {
-      "src_blob_off": 8589,
+      "src_blob_off": 8762,
       "inst_length": 5,
       "disp_offset": 1,
       "src_fn": 0,
       "target_fn": 2
     },
     {
-      "src_blob_off": 10140,
+      "src_blob_off": 10313,
       "inst_length": 5,
       "disp_offset": 1,
       "src_fn": 0,
@@ -396,70 +403,70 @@
       "target_fn": 0
     },
     {
-      "src_blob_off": 11486,
+      "src_blob_off": 11678,
       "inst_length": 5,
       "disp_offset": 1,
       "src_fn": 4,
       "target_fn": 0
     },
     {
-      "src_blob_off": 11498,
+      "src_blob_off": 11690,
       "inst_length": 5,
       "disp_offset": 1,
       "src_fn": 4,
       "target_fn": 0
     },
     {
-      "src_blob_off": 11510,
+      "src_blob_off": 11702,
       "inst_length": 5,
       "disp_offset": 1,
       "src_fn": 4,
       "target_fn": 0
     },
     {
-      "src_blob_off": 11568,
+      "src_blob_off": 11760,
       "inst_length": 5,
       "disp_offset": 1,
       "src_fn": 4,
       "target_fn": 0
     },
     {
-      "src_blob_off": 11619,
+      "src_blob_off": 11811,
       "inst_length": 5,
       "disp_offset": 1,
       "src_fn": 4,
       "target_fn": 0
     },
     {
-      "src_blob_off": 11648,
+      "src_blob_off": 11840,
       "inst_length": 5,
       "disp_offset": 1,
       "src_fn": 4,
       "target_fn": 0
     },
     {
-      "src_blob_off": 11681,
+      "src_blob_off": 11873,
       "inst_length": 5,
       "disp_offset": 1,
       "src_fn": 4,
       "target_fn": 0
     },
     {
-      "src_blob_off": 11695,
+      "src_blob_off": 11887,
       "inst_length": 5,
       "disp_offset": 1,
       "src_fn": 4,
       "target_fn": 0
     },
     {
-      "src_blob_off": 11775,
+      "src_blob_off": 11967,
       "inst_length": 5,
       "disp_offset": 1,
       "src_fn": 4,
       "target_fn": 0
     },
     {
-      "src_blob_off": 11831,
+      "src_blob_off": 12023,
       "inst_length": 5,
       "disp_offset": 1,
       "src_fn": 4,

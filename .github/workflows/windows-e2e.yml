@@ -76,6 +76,10 @@ jobs:
           path: ${{ runner.temp }}/churro-custom-api-bundle
       - name: Test Go packages
         run: go test ./...
+      - name: Test Windows clipboard readback
+        env:
+          CHURRO_TEST_CLIPBOARD: "1"
+        run: go test -v ./cmd/churro-gen -run '^TestWindowsClipboardCFTextReadback$' -count=1
       - name: Generate and execute Windows payload loaders
         shell: pwsh
         run: ./scripts/test-windows-e2e.ps1 -LoaderBundleDirectory "$env:RUNNER_TEMP\churro-rotated-bundle" -CustomImportBundleDirectory "$env:RUNNER_TEMP\churro-custom-api-bundle"

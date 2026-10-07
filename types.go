@@ -90,7 +90,9 @@ func (NativeDLL) churroPayload() {}
 
 // NativeDLLExport identifies a native DLL export. When Arguments is empty,
 // the export is called without a parameter. Otherwise the loader passes one
-// pointer to the argument string, encoded as UTF-8 or UTF-16 as selected.
+// pointer to the argument string. The loader converts UTF-8 caller text to
+// the target process's ANSI code page by default, or passes UTF-16 when
+// Unicode is true.
 type NativeDLLExport struct {
 	Name      string
 	Arguments string

@@ -74,9 +74,9 @@ function Assert-Markers(
             $Problems += "missing $Marker"
             continue
         }
-        $Actual = (Get-Content -Raw $Marker).Trim()
+        $Actual = Get-Content -Raw $Marker
         Write-Host "$Label marker $Marker = '$Actual'"
-        if ($Actual -ne $Markers[$Suffix]) {
+        if ($Actual -cne $Markers[$Suffix]) {
             $Problems += "unexpected content in $Marker"
         }
     }
@@ -304,6 +304,20 @@ try {
     Invoke-TestCase "native-args-ansi" {
         Invoke-CLILoaderCase -Label "native-args-ansi" -InputPath $ImportsDll -Options @("-method", "RunArgsA", "-args", "churro-ansi-argument") -Markers @{
             ".args-ansi" = "ANSI argument received"
+        }
+    }
+    Add-Type -Namespace ChurroE2E -Name NativeCodePage -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern uint GetACP();
+'@
+    $AnsiCodePage = [ChurroE2E.NativeCodePage]::GetACP()
+    if ($AnsiCodePage -eq 65001) {
+        throw "native-args-ansi-nonascii requires a non-UTF-8 Windows ANSI code page"
+    }
+    Write-Host "Testing non-ASCII native export argument with ANSI code page $AnsiCodePage"
+    Invoke-TestCase "native-args-ansi-nonascii" {
+        Invoke-CLILoaderCase -Label "native-args-ansi-nonascii" -InputPath $ImportsDll -Options @("-method", "RunArgsACP", "-args", "caf$([char]0x00e9)") -Markers @{
+            ".args-acp" = "ANSI code page argument received"
         }
     }
     Invoke-TestCase "native-args-unicode" {

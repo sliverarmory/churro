@@ -2,6 +2,7 @@ package churro
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"strconv"
@@ -12,36 +13,60 @@ const hexDigits = "0123456789abcdef"
 // formatLoader renders raw shellcode in the representation requested by the
 // caller. The binary result is copied so every Result owns its returned bytes.
 func formatLoader(raw []byte, format Format) ([]byte, error) {
+	return formatLoaderContext(context.Background(), raw, format)
+}
+
+func formatLoaderContext(ctx context.Context, raw []byte, format Format) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	switch format {
 	case FormatBinary:
-		return append([]byte(nil), raw...), nil
+		out := make([]byte, len(raw))
+		for start := 0; start < len(raw); start += 64 << 10 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			end := min(start+(64<<10), len(raw))
+			copy(out[start:end], raw[start:end])
+		}
+		return out, ctx.Err()
 	case FormatBase64:
 		out := make([]byte, base64.StdEncoding.EncodedLen(len(raw)))
-		base64.StdEncoding.Encode(out, raw)
-		return out, nil
+		for start := 0; start < len(raw); start += 48 << 10 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			end := min(start+(48<<10), len(raw))
+			base64.StdEncoding.Encode(out[base64.StdEncoding.EncodedLen(start):], raw[start:end])
+		}
+		return out, ctx.Err()
 	case FormatC:
-		return formatC(raw), nil
+		return formatC(ctx, raw)
 	case FormatRuby:
-		return formatRuby(raw), nil
+		return formatRuby(ctx, raw)
 	case FormatPython:
-		return formatPython(raw), nil
+		return formatPython(ctx, raw)
 	case FormatPowerShell:
-		return formatPowerShell(raw), nil
+		return formatPowerShell(ctx, raw)
 	case FormatCSharp:
-		return formatCSharp(raw), nil
+		return formatCSharp(ctx, raw)
 	case FormatHex:
-		return formatHex(raw), nil
+		return formatHex(ctx, raw)
 	case FormatUUID:
-		return formatUUID(raw), nil
+		return formatUUID(ctx, raw)
 	default:
 		return nil, fmt.Errorf("churro: unsupported output format %d", format)
 	}
 }
 
-func formatC(raw []byte) []byte {
+func formatC(ctx context.Context, raw []byte) ([]byte, error) {
 	var out bytes.Buffer
 	out.WriteString("unsigned char buf[] =\n")
 	for start := 0; start < len(raw); start += 16 {
+		if err := formatCheckpoint(ctx, start); err != nil {
+			return nil, err
+		}
 		end := min(start+16, len(raw))
 		out.WriteByte('"')
 		for _, value := range raw[start:end] {
@@ -53,13 +78,16 @@ func formatC(raw []byte) []byte {
 		out.WriteString("\"\"\n")
 	}
 	out.WriteString(";\n")
-	return out.Bytes()
+	return out.Bytes(), ctx.Err()
 }
 
-func formatRuby(raw []byte) []byte {
+func formatRuby(ctx context.Context, raw []byte) ([]byte, error) {
 	var out bytes.Buffer
 	out.WriteString("buf = [\n")
 	for i, value := range raw {
+		if err := formatCheckpoint(ctx, i); err != nil {
+			return nil, err
+		}
 		if i%16 == 0 {
 			out.WriteString("  ")
 		}
@@ -74,13 +102,16 @@ func formatRuby(raw []byte) []byte {
 		}
 	}
 	out.WriteString("].pack(\"C*\")\n")
-	return out.Bytes()
+	return out.Bytes(), ctx.Err()
 }
 
-func formatPython(raw []byte) []byte {
+func formatPython(ctx context.Context, raw []byte) ([]byte, error) {
 	var out bytes.Buffer
 	out.WriteString("buf = b\"\"\n")
 	for start := 0; start < len(raw); start += 16 {
+		if err := formatCheckpoint(ctx, start); err != nil {
+			return nil, err
+		}
 		end := min(start+16, len(raw))
 		out.WriteString("buf += b\"")
 		for _, value := range raw[start:end] {
@@ -88,28 +119,34 @@ func formatPython(raw []byte) []byte {
 		}
 		out.WriteString("\"\n")
 	}
-	return out.Bytes()
+	return out.Bytes(), ctx.Err()
 }
 
-func formatPowerShell(raw []byte) []byte {
+func formatPowerShell(ctx context.Context, raw []byte) ([]byte, error) {
 	var out bytes.Buffer
 	out.WriteString("[Byte[]] $buf = ")
 	for i, value := range raw {
+		if err := formatCheckpoint(ctx, i); err != nil {
+			return nil, err
+		}
 		if i != 0 {
 			out.WriteByte(',')
 		}
 		writeHexLiteral(&out, value)
 	}
 	out.WriteByte('\n')
-	return out.Bytes()
+	return out.Bytes(), ctx.Err()
 }
 
-func formatCSharp(raw []byte) []byte {
+func formatCSharp(ctx context.Context, raw []byte) ([]byte, error) {
 	var out bytes.Buffer
 	out.WriteString("byte[] my_buf = new byte[")
 	out.WriteString(strconv.Itoa(len(raw)))
 	out.WriteString("] {\n")
 	for i, value := range raw {
+		if err := formatCheckpoint(ctx, i); err != nil {
+			return nil, err
+		}
 		if i%16 == 0 {
 			out.WriteString("  ")
 		}
@@ -122,22 +159,28 @@ func formatCSharp(raw []byte) []byte {
 		}
 	}
 	out.WriteString("};\n")
-	return out.Bytes()
+	return out.Bytes(), ctx.Err()
 }
 
-func formatHex(raw []byte) []byte {
+func formatHex(ctx context.Context, raw []byte) ([]byte, error) {
 	var out bytes.Buffer
-	for _, value := range raw {
+	for i, value := range raw {
+		if err := formatCheckpoint(ctx, i); err != nil {
+			return nil, err
+		}
 		writeEscapedByte(&out, value)
 	}
-	return out.Bytes()
+	return out.Bytes(), ctx.Err()
 }
 
 // UUID output follows Windows GUID byte order for the first three fields.
 // The final block is zero-padded to 16 bytes, matching Fritter's UUID format.
-func formatUUID(raw []byte) []byte {
+func formatUUID(ctx context.Context, raw []byte) ([]byte, error) {
 	var out bytes.Buffer
 	for start := 0; start < len(raw); start += 16 {
+		if err := formatCheckpoint(ctx, start); err != nil {
+			return nil, err
+		}
 		var block [16]byte
 		copy(block[:], raw[start:min(start+16, len(raw))])
 		for i, position := range [...]int{3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15} {
@@ -149,7 +192,14 @@ func formatUUID(raw []byte) []byte {
 		}
 		out.WriteByte('\n')
 	}
-	return out.Bytes()
+	return out.Bytes(), ctx.Err()
+}
+
+func formatCheckpoint(ctx context.Context, offset int) error {
+	if offset&4095 == 0 {
+		return ctx.Err()
+	}
+	return nil
 }
 
 func writeEscapedByte(out *bytes.Buffer, value byte) {

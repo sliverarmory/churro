@@ -2,11 +2,38 @@ package wire
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"math/rand"
 	"testing"
 )
+
+type cancelAfterChecks struct {
+	context.Context
+	cancel context.CancelFunc
+	checks int
+	stopAt int
+}
+
+func (c *cancelAfterChecks) Err() error {
+	c.checks++
+	if c.checks == c.stopAt {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
+func TestPackAPLibContextCancelsWithinLongMatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	probe := &cancelAfterChecks{Context: ctx, cancel: cancel, stopAt: 16}
+	packed, err := packAPLibContext(probe, bytes.Repeat([]byte("ABCD"), 1<<18))
+	if !errors.Is(err, context.Canceled) || packed != nil || probe.checks != probe.stopAt {
+		t.Fatalf("pack after %d checks = %x, %v; want mid-match cancellation", probe.checks, packed, err)
+	}
+}
 
 // referenceDepack follows the native loader's token decoder and checks the
 // exact output length, including overlapping back references.

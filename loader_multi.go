@@ -2,6 +2,7 @@ package churro
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -44,11 +45,18 @@ func embeddedLoaderMetadata(second bool) (LoaderMetadata, error) {
 // sections, .text stays resident and references into other sections pass
 // through a dispatcher that decrypts the callee for the duration of its call.
 func prepareCombinedWithMetadata(loaderImage, shimImage []byte, meta LoaderMetadata, entropy io.Reader) ([]byte, error) {
+	return prepareCombinedWithMetadataContext(context.Background(), loaderImage, shimImage, meta, entropy)
+}
+
+func prepareCombinedWithMetadataContext(ctx context.Context, loaderImage, shimImage []byte, meta LoaderMetadata, entropy io.Reader) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := validateLoaderMetadata(meta, loaderImage); err != nil {
 		return nil, fmt.Errorf("loader metadata: %w", err)
 	}
 	if len(meta.Functions) == 1 {
-		return prepareCombined(loaderImage, shimImage, entropy)
+		return prepareCombinedContext(ctx, loaderImage, shimImage, entropy)
 	}
 	if len(meta.Functions)+1 > shimMaxFunctions {
 		return nil, fmt.Errorf("%d loader sections exceed the dispatch table capacity", len(meta.Functions))
@@ -66,6 +74,11 @@ func prepareCombinedWithMetadata(loaderImage, shimImage []byte, meta LoaderMetad
 	}
 	protectedRefs := 0
 	for i, ref := range meta.References {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if !resident[ref.TargetFn] {
 			// The thunk tail-jumps into a dispatcher that CALLs the callee
 			// and then returns to the original CALL's return address.
@@ -123,6 +136,11 @@ func prepareCombinedWithMetadata(loaderImage, shimImage []byte, meta LoaderMetad
 	copy(combined[dispatchOff:], dispatcher)
 	thunkNum := 0
 	for i, ref := range meta.References {
+		if i&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		if resident[ref.TargetFn] {
 			continue
 		}
@@ -164,6 +182,11 @@ func prepareCombinedWithMetadata(loaderImage, shimImage []byte, meta LoaderMetad
 			}
 			entry[8], entry[9] = key[0], 0
 			for j := fn.Offset; j < fn.Offset+fn.Size; j++ {
+				if (j-fn.Offset)&4095 == 0 {
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
+				}
 				combined[shimPadded+int(j)] ^= key[0]
 			}
 		}
@@ -174,6 +197,9 @@ func prepareCombinedWithMetadata(loaderImage, shimImage []byte, meta LoaderMetad
 	tail[8], tail[9], tail[10], tail[11] = 0, 1, 0, 0
 	if _, err := io.ReadFull(entropy, combined[ft:ft+8]); err != nil {
 		return nil, fmt.Errorf("scramble function table marker: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return combined, nil
 }

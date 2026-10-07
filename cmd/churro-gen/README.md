@@ -7,9 +7,10 @@ arguments. With a managed DLL, `-class` and `-method` select a public static
 method, and `-args` is parsed into one string per method parameter. Quote
 arguments containing spaces according to Windows command-line rules. With a
 native DLL, `-method` selects an export and `-args` supplies its single string
-argument; `-unicode` passes that argument as UTF-16. `-args` is limited to
-250 bytes and is unavailable for scripts. `-fork` takes a hexadecimal host
-entry-point RVA for host continuation.
+argument in the target process ANSI code page; `-unicode` passes it as UTF-16.
+The CLI accepts Unicode command-line text before encoding the export argument.
+`-args` is limited to 250 bytes and is unavailable for scripts. `-fork` takes a
+hexadecimal host entry-point RVA for host continuation.
 
 Output formats are `bin`, `base64`, `c`, `ruby`, `python`, `powershell`,
 `csharp`, `hex`, and `uuid`, with Fritter-compatible numeric values 1 through
@@ -18,13 +19,21 @@ Output formats are `bin`, `base64`, `c`, `ruby`, `python`, `powershell`,
 `loader.uuid` according to the format. The CLI uses the Go aPLib packer by
 default, matching Fritter's native CLI; `-compression none` leaves module bytes
 uncompressed. The Go API retains its zero-value `CompressionNone` default.
-Base64 output is written to the selected file; the CLI does not also copy it
-to the Windows clipboard as Fritter's native CLI does.
+On Windows, the CLI also attempts to copy Base64 output to the clipboard as
+CF_TEXT, matching Fritter's native CLI. Clipboard access is best effort; the
+selected output file and command result do not depend on it. Other formats do
+not change the clipboard. On success, the CLI prints the selected input,
+output format and path, staging, compression, exit mode, OEP when selected,
+and protection settings alongside its `wrote` lines.
 
 For HTTP staging, set `-server` to an HTTP or HTTPS base URL and optionally
 set `-modname` to an eight-byte-or-shorter module filename. The CLI writes the
-loader to `-output` and the separate module beside it, or to `-module-output`
-when specified. Host the module at the URL reported by the generator.
+loader to `-output` and the separate module in the current working directory,
+or to `-module-output` when specified. It writes the module first, so a failed
+module write does not leave a loader pointing to a missing module. Host the
+module at the URL reported by the generator.
+The CLI rejects output paths that refer to the input or to each other,
+including hard links and symlink output files.
 
 The CLI accepts native Fritter's short flag aliases: `-i` input, `-o`
 output, `-c` class, `-m` method, `-r` runtime, `-d` domain, `-f` format,

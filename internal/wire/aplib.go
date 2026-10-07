@@ -1,11 +1,21 @@
 package wire
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+)
 
 // packAPLib writes the raw aPLib token stream consumed by the embedded
 // aP_depack routine. This encoder is locally written and uses a bounded
 // greedy match finder; it does not copy a third-party packer implementation.
 func packAPLib(input []byte) ([]byte, error) {
+	return packAPLibContext(context.Background(), input)
+}
+
+func packAPLibContext(ctx context.Context, input []byte) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(input) == 0 {
 		return nil, fmt.Errorf("cannot pack an empty module")
 	}
@@ -14,7 +24,12 @@ func packAPLib(input []byte) ([]byte, error) {
 	last := make(map[uint32]int, min(len(input), 1<<16))
 	lastPair := make(map[uint16]int, min(len(input), 1<<16))
 	previousMatch := false
-	for at := 1; at < len(input); {
+	for at, steps := 1, 0; at < len(input); steps++ {
+		if steps&1023 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		bestLen, bestOff := 0, 0
 		if at+3 <= len(input) {
 			key := apTriple(input, at)
@@ -23,6 +38,11 @@ func packAPLib(input []byte) ([]byte, error) {
 				if off > 0 && off <= 0xffff {
 					limit := min(len(input)-at, 1<<20)
 					for bestLen < limit && input[at+bestLen] == input[at+bestLen-off] {
+						if bestLen&4095 == 0 {
+							if err := ctx.Err(); err != nil {
+								return nil, err
+							}
+						}
 						bestLen++
 					}
 					bestOff = off
@@ -53,6 +73,11 @@ func packAPLib(input []byte) ([]byte, error) {
 			}
 			p.gamma(uint32(bestLen - bonus))
 			for i := 0; i < bestLen; i++ {
+				if i&4095 == 0 {
+					if err := ctx.Err(); err != nil {
+						return nil, err
+					}
+				}
 				if at+i+3 <= len(input) {
 					last[apTriple(input, at+i)] = at + i
 				}
@@ -117,6 +142,9 @@ func packAPLib(input []byte) ([]byte, error) {
 	p.bit(1)
 	p.bit(0)
 	p.data = append(p.data, 0)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return p.data, nil
 }
 

@@ -89,19 +89,28 @@ func (g *Generator) Generate(ctx context.Context, request Request) (Result, erro
 	if g.bundle != nil {
 		config.Poly, config.APIImports = g.bundle.wireMetadata()
 	}
-	instance, staged, moduleName, err := wire.Build(config)
+	instance, staged, moduleName, err := wire.BuildContext(ctx, config)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return Result{}, err
+		}
 		return Result{}, classifyWireFailure(err)
 	}
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	raw, err := buildLoaderWithImages(instance, rand.Reader, g.bundle)
+	raw, err := buildLoaderWithImagesContext(ctx, instance, rand.Reader, g.bundle)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return Result{}, err
+		}
 		return Result{}, &GenerationError{Code: ErrorInvalidConfiguration, Cause: err}
 	}
-	loader, err := formatLoader(raw, request.Format)
+	loader, err := formatLoaderContext(ctx, raw, request.Format)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return Result{}, err
+		}
 		return Result{}, &GenerationError{Code: ErrorInvalidFormat, Cause: err}
 	}
 	result := Result{Loader: loader}
@@ -116,7 +125,10 @@ func (g *Generator) Generate(ctx context.Context, request Request) (Result, erro
 		}
 		result.StagedModule = &StagedModule{Name: moduleName, URL: moduleURL, Data: staged}
 	}
-	return result, ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
+	}
+	return result, nil
 }
 
 func classifyValidationFailure(err error) error {

@@ -2,6 +2,7 @@ package churro
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"fmt"
@@ -18,6 +19,13 @@ func buildLoader(instance []byte, entropy io.Reader) ([]byte, error) {
 }
 
 func buildLoaderWithImages(instance []byte, entropy io.Reader, images *LoaderBundle) ([]byte, error) {
+	return buildLoaderWithImagesContext(context.Background(), instance, entropy, images)
+}
+
+func buildLoaderWithImagesContext(ctx context.Context, instance []byte, entropy io.Reader, images *LoaderBundle) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(instance) == 0 || len(instance) > int(^uint32(0)>>1) {
 		return nil, fmt.Errorf("invalid instance size %d", len(instance))
 	}
@@ -46,7 +54,7 @@ func buildLoaderWithImages(instance []byte, entropy io.Reader, images *LoaderBun
 			return nil, err
 		}
 	}
-	combined, err := prepareCombinedWithMetadata(loader, shim, meta, entropy)
+	combined, err := prepareCombinedWithMetadataContext(ctx, loader, shim, meta, entropy)
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +99,15 @@ func buildLoaderWithImages(instance []byte, entropy io.Reader, images *LoaderBun
 	patchTrampoline(tramp, trampFixups, pagePad)
 
 	for i := range combined {
+		if i&4095 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		combined[i] ^= key[i&(keyLen-1)]
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	result := make([]byte, 0, preBlob+pagePad+len(combined))
 	result = append(result, prefix...)
@@ -109,6 +125,9 @@ func buildLoaderWithImages(instance []byte, entropy io.Reader, images *LoaderBun
 	}
 	result = append(result, pad...)
 	result = append(result, combined...)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -130,6 +149,13 @@ func patchDecoder(d []byte, f decoderFixups, encodedStart int) error {
 }
 
 func prepareCombined(loaderImage, shimImage []byte, entropy io.Reader) ([]byte, error) {
+	return prepareCombinedContext(context.Background(), loaderImage, shimImage, entropy)
+}
+
+func prepareCombinedContext(ctx context.Context, loaderImage, shimImage []byte, entropy io.Reader) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(loaderImage) == 0 || len(shimImage) < 16 {
 		return nil, fmt.Errorf("missing embedded Windows loader")
 	}
@@ -142,6 +168,11 @@ func prepareCombined(loaderImage, shimImage []byte, entropy io.Reader) ([]byte, 
 	copy(combined[shimPadded:], loaderImage)
 	patches := map[uint32]uint32{0xDEAD0001: uint32(shimPadded), 0xDEAD0002: uint32(len(loaderImage))}
 	for i := 0; i+4 <= len(shimImage); i++ {
+		if i&4095 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		value := binary.LittleEndian.Uint32(combined[i : i+4])
 		if replacement, ok := patches[value]; ok {
 			binary.LittleEndian.PutUint32(combined[i:i+4], replacement)
@@ -169,10 +200,18 @@ func prepareCombined(loaderImage, shimImage []byte, entropy io.Reader) ([]byte, 
 	combined[ft+25] = 0x02 // shim decrypts whole loader before entry
 	combined[ft+26], combined[ft+27] = 0, 0
 	for i := shimPadded; i < len(combined); i++ {
+		if (i-shimPadded)&4095 == 0 {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+		}
 		combined[i] ^= fnKey[0]
 	}
 	if _, err := io.ReadFull(entropy, combined[ft:ft+8]); err != nil {
 		return nil, fmt.Errorf("scramble function table marker: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	return combined, nil
 }

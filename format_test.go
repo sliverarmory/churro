@@ -37,6 +37,19 @@ func TestFormatLoaderBase64RoundTrip(t *testing.T) {
 	}
 }
 
+func TestFormatLoaderBase64AcrossChunks(t *testing.T) {
+	raw := bytes.Repeat([]byte{0x00, 0x41, 0xff, 0x20, 0x7e}, 20_000)
+	got, err := formatLoader(raw, FormatBase64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := make([]byte, base64.StdEncoding.EncodedLen(len(raw)))
+	base64.StdEncoding.Encode(want, raw)
+	if !bytes.Equal(got, want) {
+		t.Fatal("chunked Base64 output differs from the standard encoder")
+	}
+}
+
 func TestFormatLoaderTextRepresentations(t *testing.T) {
 	raw := []byte{0x00, 0x41, 0xff}
 	tests := []struct {

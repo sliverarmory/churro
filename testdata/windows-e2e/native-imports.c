@@ -50,6 +50,21 @@ __declspec(dllexport) void RunArgsA(const char *argument) {
     }
 }
 
+__declspec(dllexport) void RunArgsACP(const char *argument) {
+    const wchar_t text[] = {'c', 'a', 'f', 0x00e9, 0};
+    char expected_acp[32];
+    BOOL used_default = FALSE;
+    if (GetACP() == CP_UTF8) {
+        return;
+    }
+    int length = WideCharToMultiByte(CP_ACP, 0, text, -1,
+                                     expected_acp, sizeof(expected_acp), NULL, &used_default);
+    if (length > 0 && !used_default && argument != NULL &&
+        lstrcmpA(argument, expected_acp) == 0) {
+        write_argument_marker(".args-acp", "ANSI code page argument received");
+    }
+}
+
 __declspec(dllexport) void RunArgsW(const wchar_t *argument) {
     if (argument != NULL && lstrcmpW(argument, L"churro-wide-argument") == 0) {
         write_argument_marker(".args-wide", "Unicode argument received");

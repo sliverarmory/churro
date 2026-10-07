@@ -2,7 +2,12 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -111,6 +116,256 @@ func TestCLIHelpExitsSuccessfully(t *testing.T) {
 				t.Fatalf("help output omits CLI options: %q", stderr.String())
 			}
 		})
+	}
+}
+
+func TestCLIBase64ClipboardIsBestEffortAndFormatScoped(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "payload.vbs")
+	if err := os.WriteFile(input, []byte(`WScript.Echo "hello"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name       string
+		format     string
+		wantCopies int
+	}{
+		{name: "base64", format: "base64", wantCopies: 1},
+		{name: "binary", format: "bin", wantCopies: 0},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			output := filepath.Join(dir, test.name+".out")
+			var stdout, stderr bytes.Buffer
+			var copied []byte
+			copies := 0
+			code := runWithClipboard([]string{
+				"-input", input, "-format", test.format,
+				"-compression", "none", "-output", output,
+			}, &stdout, &stderr, func(data []byte) error {
+				copies++
+				copied = append([]byte(nil), data...)
+				return errors.New("clipboard unavailable")
+			})
+			if code != 0 || stderr.Len() != 0 {
+				t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+			}
+			if copies != test.wantCopies {
+				t.Fatalf("clipboard copies=%d, want %d", copies, test.wantCopies)
+			}
+			written, err := os.ReadFile(output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(stdout.String(), "wrote "+output) {
+				t.Fatalf("stdout=%q", stdout.String())
+			}
+			if !strings.Contains(stdout.String(), "Input        "+input) ||
+				!strings.Contains(stdout.String(), "Output       "+output+" ("+test.format+")") ||
+				!strings.Contains(stdout.String(), "Staging      Disabled") ||
+				!strings.Contains(stdout.String(), "Compression  None") ||
+				!strings.Contains(stdout.String(), "Instance     Embedded") ||
+				!strings.Contains(stdout.String(), "Exit         Thread") ||
+				!strings.Contains(stdout.String(), "Protections  ") {
+				t.Fatalf("incomplete success report: %q", stdout.String())
+			}
+			if test.format == "base64" {
+				if !bytes.Equal(copied, written) {
+					t.Fatal("clipboard bytes differ from written Base64 output")
+				}
+				if _, err := base64.StdEncoding.DecodeString(string(written)); err != nil {
+					t.Fatalf("written output is not Base64: %v", err)
+				}
+			}
+		})
+	}
+	var stdout, stderr bytes.Buffer
+	copies := 0
+	if code := runWithClipboard([]string{
+		"-input", input, "-format", "base64",
+		"-compression", "none", "-output", dir,
+	}, &stdout, &stderr, func([]byte) error {
+		copies++
+		return nil
+	}); code != 1 || copies != 0 || !strings.Contains(stderr.String(), "write loader:") {
+		t.Fatalf("failed write: exit=%d copies=%d stderr=%q", code, copies, stderr.String())
+	}
+}
+
+func TestCLIStagedModuleDefaultsToCurrentDirectory(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	input := filepath.Join(dir, "payload.vbs")
+	if err := os.WriteFile(input, []byte(`WScript.Echo "hello"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	loader := filepath.Join("output", "loader.bin")
+	var stdout, stderr bytes.Buffer
+	code := run([]string{
+		"-input", input, "-output", loader, "-compression", "none",
+		"-server", "https://example.test/modules/", "-modname", "PAYLOAD",
+	}, &stdout, &stderr)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(loader); err != nil {
+		t.Fatalf("loader output: %v", err)
+	}
+	module, err := os.ReadFile("PAYLOAD")
+	if err != nil || len(module) == 0 {
+		t.Fatalf("module in current directory: bytes=%d err=%v", len(module), err)
+	}
+	if _, err := os.Stat(filepath.Join("output", "PAYLOAD")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unexpected module beside loader: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "wrote staged module PAYLOAD") {
+		t.Fatalf("stdout=%q", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Staging      HTTPS (module PAYLOAD)") ||
+		!strings.Contains(stdout.String(), "Instance     HTTP") {
+		t.Fatalf("incomplete staged report: %q", stdout.String())
+	}
+
+	// An explicit module path still takes precedence over the cwd default.
+	custom := filepath.Join("override", "module.bin")
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{
+		"-input", input, "-output", loader, "-compression", "none",
+		"-server", "https://example.test/modules/", "-modname", "CUSTOM",
+		"-module-output", custom,
+	}, &stdout, &stderr)
+	if code != 0 || stderr.Len() != 0 {
+		t.Fatalf("explicit module path: exit=%d stderr=%q", code, stderr.String())
+	}
+	if module, err := os.ReadFile(custom); err != nil || len(module) == 0 {
+		t.Fatalf("explicit module output: bytes=%d err=%v", len(module), err)
+	}
+	if _, err := os.Stat("CUSTOM"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unexpected module in cwd after override: %v", err)
+	}
+
+	blocked := filepath.Join(dir, "blocked")
+	if err := os.Mkdir(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	failedLoader := filepath.Join("failed", "loader.bin")
+	stdout.Reset()
+	stderr.Reset()
+	code = run([]string{
+		"-input", input, "-output", failedLoader, "-compression", "none",
+		"-server", "https://example.test/modules/", "-modname", "FAIL",
+		"-module-output", blocked,
+	}, &stdout, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "write staged module:") {
+		t.Fatalf("failed module write: exit=%d stderr=%q", code, stderr.String())
+	}
+	if _, err := os.Stat(failedLoader); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("loader exists after failed module write: %v", err)
+	}
+}
+
+func TestCLIRejectsOutputThatOverwritesInput(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	input := "foo.vbs"
+	source := []byte(`WScript.Echo "keep source"`)
+	if err := os.WriteFile(input, source, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		args []string
+	}{
+		{name: "loader", args: []string{"-output", input}},
+		{name: "default staged module", args: []string{"-output", "loader.bin", "-server", "https://example.test/", "-modname", input}},
+		{name: "explicit staged module", args: []string{"-output", "loader.bin", "-server", "https://example.test/", "-module-output", input}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			args := append([]string{"-input", input, "-compression", "none"}, tc.args...)
+			if code := run(args, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "output paths:") {
+				t.Fatalf("exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+			}
+			got, err := os.ReadFile(input)
+			if err != nil || !bytes.Equal(got, source) {
+				t.Fatalf("source changed: %q, %v", got, err)
+			}
+			if _, err := os.Stat("loader.bin"); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("loader exists after rejected output: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateOutputTargetsRejectsAliases(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "source.vbs")
+	loader := filepath.Join(dir, "Loader.bin")
+	module := filepath.Join(dir, "module.bin")
+	if err := os.WriteFile(input, []byte("source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(loader, []byte("existing loader"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Link(loader, module); err != nil {
+		t.Fatalf("create hard link: %v", err)
+	}
+	if err := validateOutputTargets(input, loader, module); err == nil {
+		t.Fatal("hard-linked outputs accepted")
+	}
+	if err := os.Remove(module); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(loader, module); err == nil {
+		if err := validateOutputTargets(input, loader, module); err == nil {
+			t.Fatal("symlink output accepted")
+		}
+		if err := os.Remove(module); err != nil {
+			t.Fatal(err)
+		}
+	}
+	aliasDir := filepath.Join(dir, "alias")
+	if err := os.Symlink(dir, aliasDir); err == nil {
+		if err := validateOutputTargets(input, loader, filepath.Join(aliasDir, "Loader.bin")); err == nil {
+			t.Fatal("parent-directory symlink alias accepted")
+		}
+	}
+	if runtime.GOOS == "windows" {
+		if err := validateOutputTargets(input, loader, filepath.Join(dir, "loader.BIN")); err == nil {
+			t.Fatal("case-insensitive Windows output alias accepted")
+		}
+	}
+}
+
+func TestGenerationSummarySelectedOptions(t *testing.T) {
+	var out bytes.Buffer
+	printGenerationSummary(&out, "source.dll", "loader.uuid", "", churro.NativeDLL{}, nil,
+		churro.FormatUUID, churro.EntropyDefault, churro.CompressionAPLib,
+		churro.ExitProcess, churro.PEHeadersPreserve,
+		&churro.HostImageContinuation{EntryPointRVA: 0x1a2b})
+	for _, line := range []string{
+		"Input        source.dll", "Output       loader.uuid (uuid)",
+		"Compression  aPLib", "Exit         Process", "OEP          0x1A2B",
+		"ARX encryption", "PE headers preserve",
+	} {
+		if !strings.Contains(out.String(), line) {
+			t.Fatalf("summary missing %q: %q", line, out.String())
+		}
+	}
+	out.Reset()
+	staging := &churro.HTTPStaging{}
+	staging.BaseURL.Scheme = "https"
+	printGenerationSummary(&out, "source.vbs", "loader.bin", "PAYLOAD", churro.VBScript{}, staging,
+		churro.FormatBinary, churro.EntropyNone, churro.CompressionNone,
+		churro.ExitBlock, churro.PEHeadersOverwrite, nil)
+	for _, line := range []string{"Staging      HTTPS (module PAYLOAD)", "Compression  None", "Exit         Block"} {
+		if !strings.Contains(out.String(), line) {
+			t.Fatalf("summary missing %q: %q", line, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "ARX encryption") || strings.Contains(out.String(), "PE headers") {
+		t.Fatalf("summary reported inapplicable protection: %q", out.String())
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
@@ -36,6 +37,10 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) int {
+	return runWithClipboard(args, stdout, stderr, copyBase64ToClipboard)
+}
+
+func runWithClipboard(args []string, stdout, stderr io.Writer, copyClipboard func([]byte) error) int {
 	flags := flag.NewFlagSet("churro-gen", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	input := flags.String("input", "", "input Windows x64 EXE, DLL, VBS, or JS path")
@@ -57,7 +62,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	fork := flags.String("fork", "", "host image continuation entry point RVA (hex)")
 	server := flags.String("server", "", "HTTP or HTTPS base URL for a staged payload")
 	moduleName := flags.String("modname", "", "staged module filename (default: generated)")
-	moduleOutput := flags.String("module-output", "", "staged module output path (default: beside loader)")
+	moduleOutput := flags.String("module-output", "", "staged module output path (default: current directory)")
 	bundleDir := flags.String("loader-bundle", "", "directory containing a custom native loader bundle")
 	showVersion := flags.Bool("version", false, "print version information")
 	flags.StringVar(input, "i", "", "alias for -input")
@@ -202,12 +207,22 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		stagedPath = *moduleOutput
 		if stagedPath == "" {
-			stagedPath = filepath.Join(filepath.Dir(outputPath), result.StagedModule.Name)
+			stagedPath = result.StagedModule.Name
 		}
-		loaderPath, loaderErr := filepath.Abs(outputPath)
-		stagedAbs, stagedErr := filepath.Abs(stagedPath)
-		if loaderErr != nil || stagedErr != nil || loaderPath == stagedAbs {
-			fmt.Fprintln(stderr, "staged module output must differ from loader output")
+	}
+	if err := validateOutputTargets(*input, outputPath, stagedPath); err != nil {
+		fmt.Fprintf(stderr, "output paths: %v\n", err)
+		return 2
+	}
+	if staging != nil {
+		if err := writeOutput(stagedPath, result.StagedModule.Data); err != nil {
+			fmt.Fprintf(stderr, "write staged module: %v\n", err)
+			return 1
+		}
+		// Recheck after creating the module, including aliases through case
+		// insensitive directories or pre-existing hard links.
+		if err := validateOutputTargets(*input, outputPath, stagedPath); err != nil {
+			fmt.Fprintf(stderr, "output paths: %v\n", err)
 			return 2
 		}
 	}
@@ -215,15 +230,64 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "write loader: %v\n", err)
 		return 1
 	}
+	if format == churro.FormatBase64 {
+		// Match Fritter's Windows CLI convenience behavior. Clipboard access is
+		// best effort and must not change the file or command result.
+		_ = copyClipboard(result.Loader)
+	}
 	fmt.Fprintf(stdout, "wrote %s (%d bytes)\n", outputPath, len(result.Loader))
 	if staging != nil {
-		if err := writeOutput(stagedPath, result.StagedModule.Data); err != nil {
-			fmt.Fprintf(stderr, "write staged module: %v\n", err)
-			return 1
-		}
 		fmt.Fprintf(stdout, "wrote staged module %s (%d bytes)\n", stagedPath, len(result.StagedModule.Data))
 	}
+	printGenerationSummary(stdout, *input, outputPath, stagedPath, payload, staging,
+		format, entropy, compression, exit, headers, continuation)
 	return 0
+}
+
+func printGenerationSummary(out io.Writer, input, output, stagedPath string,
+	payload churro.Payload, staging *churro.HTTPStaging, format churro.Format, entropy churro.Entropy,
+	compression churro.Compression, exit churro.ExitBehavior, headers churro.PEHeaders,
+	continuation *churro.HostImageContinuation) {
+	formatNames := [...]string{"bin", "base64", "c", "ruby", "python", "powershell", "csharp", "hex", "uuid"}
+	fmt.Fprintln(out, "SUCCESS: Shellcode generated.")
+	fmt.Fprintf(out, "  Input        %s\n", input)
+	fmt.Fprintf(out, "  Output       %s (%s)\n", output, formatNames[format])
+	if staging == nil {
+		fmt.Fprintln(out, "  Staging      Disabled")
+		fmt.Fprintln(out, "  Instance     Embedded")
+	} else {
+		fmt.Fprintf(out, "  Staging      %s (module %s)\n", strings.ToUpper(staging.BaseURL.Scheme), stagedPath)
+		fmt.Fprintln(out, "  Instance     HTTP")
+	}
+	if compression == churro.CompressionAPLib {
+		fmt.Fprintln(out, "  Compression  aPLib")
+	} else {
+		fmt.Fprintln(out, "  Compression  None")
+	}
+	switch exit {
+	case churro.ExitProcess:
+		fmt.Fprintln(out, "  Exit         Process")
+	case churro.ExitBlock:
+		fmt.Fprintln(out, "  Exit         Block")
+	default:
+		fmt.Fprintln(out, "  Exit         Thread")
+	}
+	if continuation != nil {
+		fmt.Fprintf(out, "  OEP          0x%X\n", continuation.EntryPointRVA)
+	}
+	protections := []string{"Maru API hashing", "dispatch shim", "polymorphic XOR"}
+	if entropy == churro.EntropyDefault {
+		protections = append([]string{"ARX encryption"}, protections...)
+	}
+	switch payload.(type) {
+	case churro.NativeExecutable, churro.NativeDLL:
+		peHeaders := "overwrite"
+		if headers == churro.PEHeadersPreserve {
+			peHeaders = "preserve"
+		}
+		protections = append(protections, "PE headers "+peHeaders)
+	}
+	fmt.Fprintf(out, "  Protections  %s\n", strings.Join(protections, ", "))
 }
 
 func stagingForFlags(server, moduleName, moduleOutput string) (*churro.HTTPStaging, error) {
@@ -245,6 +309,65 @@ func writeOutput(path string, data []byte) error {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+type outputTarget struct {
+	name      string
+	path      string
+	canonical string
+	info      os.FileInfo
+}
+
+// validateOutputTargets prevents a loader or staged module from replacing its
+// input or each other. It creates output directories as writeOutput would, then
+// resolves parent links and checks existing file identities. Direct symlink
+// output files are rejected so even a dangling link cannot hide an alias.
+func validateOutputTargets(input, loader, staged string) error {
+	targets := []outputTarget{{name: "input", path: input}, {name: "loader", path: loader}}
+	if staged != "" {
+		targets = append(targets, outputTarget{name: "staged module", path: staged})
+	}
+	for i := range targets {
+		abs, err := filepath.Abs(targets[i].path)
+		if err != nil {
+			return fmt.Errorf("resolve %s path: %w", targets[i].name, err)
+		}
+		if i != 0 {
+			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+				return fmt.Errorf("create %s directory: %w", targets[i].name, err)
+			}
+			if info, err := os.Lstat(abs); err == nil {
+				if info.Mode()&os.ModeSymlink != 0 {
+					return fmt.Errorf("%s output cannot be a symlink", targets[i].name)
+				}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("inspect %s path: %w", targets[i].name, err)
+			}
+		}
+		parent, err := filepath.EvalSymlinks(filepath.Dir(abs))
+		if err != nil {
+			return fmt.Errorf("resolve %s directory: %w", targets[i].name, err)
+		}
+		targets[i].canonical = filepath.Join(parent, filepath.Base(abs))
+		if info, err := os.Stat(abs); err == nil {
+			targets[i].info = info
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("inspect %s path: %w", targets[i].name, err)
+		}
+	}
+	for i := range targets {
+		for j := i + 1; j < len(targets); j++ {
+			sameName := targets[i].canonical == targets[j].canonical
+			if runtime.GOOS == "windows" {
+				sameName = strings.EqualFold(targets[i].canonical, targets[j].canonical)
+			}
+			if sameName || (targets[i].info != nil && targets[j].info != nil &&
+				os.SameFile(targets[i].info, targets[j].info)) {
+				return fmt.Errorf("%s path must differ from %s path", targets[j].name, targets[i].name)
+			}
+		}
+	}
+	return nil
 }
 
 func parseFormat(value string) (churro.Format, error) {

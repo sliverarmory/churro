@@ -41,7 +41,8 @@ and `.js` source. Native and managed PE inputs are selected from the PE
 headers. A native DLL's `DllMain` runs, followed by the named export when
 `-method` is set. `-args` supplies a raw command-line tail for native and
 managed executables and managed DLL methods. A native DLL export receives its
-single argument string; `-unicode` selects a wide-character export argument.
+single argument string in the target process ANSI code page; `-unicode`
+selects a UTF-16 export argument. Go callers supply UTF-8 strings for both.
 
 ```sh
 ./churro-gen -input payload.dll -method StartW -output payload.bin
@@ -57,13 +58,17 @@ flags expose the shared loader and native PE options. See
 [`cmd/churro-gen/README.md`](cmd/churro-gen/README.md) for the full CLI
 reference, including compatibility aliases and custom loader bundles.
 
+On Windows, the CLI also attempts to copy Base64 output to the clipboard as
+CF_TEXT. Clipboard access is best effort and does not affect the output file.
+
 The CLI defaults to aPLib compression, matching Fritter's native CLI. The Go
 API's zero-value `CompressionNone` leaves payload bytes uncompressed.
 
 To produce a loader that downloads its module, supply a base URL. The CLI
-writes the opaque staged module beside the loader using its generated name, or
-to the path selected by `-module-output`. Host that module at the URL formed
-from `-server` and its module name; the CLI does not upload it.
+writes the opaque staged module in the current working directory using its
+generated name, or to the path selected by `-module-output`. Host that module
+at the URL formed from `-server` and its module name; the CLI does not upload
+it.
 
 ```sh
 ./churro-gen -input payload.dll -method StartW \

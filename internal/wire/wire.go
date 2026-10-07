@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
@@ -53,12 +54,21 @@ type Config struct {
 // module separately when StagingURL is set. It does not read or write files.
 // The caller owns the returned byte slices.
 func Build(config Config) (instance []byte, staged []byte, moduleName string, err error) {
+	return BuildContext(context.Background(), config)
+}
+
+// BuildContext is Build with cancellation checkpoints during compression and
+// encryption. A canceled build returns no partial instance or staged module.
+func BuildContext(ctx context.Context, config Config) (instance []byte, staged []byte, moduleName string, err error) {
 	defer func() {
 		var failure *Failure
-		if err != nil && !errors.As(err, &failure) {
+		if err != nil && !errors.As(err, &failure) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			err = &Failure{Kind: FailureRandom, Err: err}
 		}
 	}()
+	if err := ctx.Err(); err != nil {
+		return nil, nil, "", err
+	}
 	if len(config.Payload) == 0 {
 		return nil, nil, "", fail(FailureFileEmpty, "payload is empty")
 	}
@@ -125,10 +135,16 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 
 	moduleData := config.Payload
 	if config.Compression == 2 {
-		moduleData, err = packAPLib(config.Payload)
+		moduleData, err = packAPLibContext(ctx, config.Payload)
 		if err != nil {
+			if ctx.Err() != nil {
+				return nil, nil, "", ctx.Err()
+			}
 			return nil, nil, "", &Failure{Kind: FailureCompression, Err: err}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, "", err
 	}
 	if len(moduleData) > math.MaxInt32-2*moduleSize {
 		return nil, nil, "", fail(FailureFileInvalid, "compressed payload exceeds wire format size limit")
@@ -150,6 +166,9 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 	put32(module, 1320, uint32(len(moduleData)))
 	put32(module, 1324, uint32(len(config.Payload)))
 	copy(module[moduleDataOffset:], moduleData)
+	if err := ctx.Err(); err != nil {
+		return nil, nil, "", err
+	}
 	if err := randomFill(module[moduleDataOffset+len(moduleData) : moduleDataOffset+len(moduleData)+int(modPadByte[0])]); err != nil {
 		return nil, nil, "", fmt.Errorf("module padding: %w", err)
 	}
@@ -245,6 +264,9 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 		put32(instance, 2152, 1) // FRITTER_INSTANCE_EMBED
 		copy(instance[instanceModOff:], module)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, "", err
+	}
 	if err := randomFill(instance[instLen-int(instPadByte[0]):]); err != nil {
 		return nil, nil, "", fmt.Errorf("instance padding: %w", err)
 	}
@@ -282,11 +304,18 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 		fillAPIHashes(instance, imports, binary.LittleEndian.Uint64(iv[:]), poly)
 		if staging {
 			put64(module, 1312, mac)
-			Crypt(module, &moduleKey, &moduleCTR, poly)
+			if err := CryptContext(ctx, module, &moduleKey, &moduleCTR, poly); err != nil {
+				return nil, nil, "", err
+			}
 		}
-		Crypt(instance[instanceCryptOff:], &instanceKey, &instanceCTR, poly)
+		if err := CryptContext(ctx, instance[instanceCryptOff:], &instanceKey, &instanceCTR, poly); err != nil {
+			return nil, nil, "", err
+		}
 	} else {
 		fillAPIHashes(instance, imports, 0, poly)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, "", err
 	}
 	if staging {
 		staged = module
