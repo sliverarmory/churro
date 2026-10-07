@@ -333,6 +333,23 @@ try {
         }
         Assert-Markers $Label $env:CHURRO_E2E_PREFIX $Markers $RunnerExitCode
     }
+    Invoke-TestCase "legacy-attached-cli" {
+        $Label = "legacy-attached-cli"
+        $Loader = Join-Path $BuildPath "$Label.bin"
+        $env:CHURRO_E2E_PREFIX = Join-Path $BuildPath $Label
+        $Markers = @{ ".imports" = "relocations and imports" }
+        Clear-Markers $env:CHURRO_E2E_PREFIX $Markers
+        Invoke-Checked "generate $Label" {
+            & $CliExe "stray-positional" ("-i" + $ImportsDll) "--methodRunImports" "-o:" $Loader "-e=" "none"
+        }
+        $RunnerOutput = @(& $RunnerExe -input $Loader -timeout 45s 2>&1)
+        $RunnerExitCode = $LASTEXITCODE
+        $RunnerOutput | ForEach-Object { Write-Host $_ }
+        if ($RunnerOutput -notcontains "shellcode thread returned") {
+            throw "$Label runner did not report shellcode completion"
+        }
+        Assert-Markers $Label $env:CHURRO_E2E_PREFIX $Markers $RunnerExitCode
+    }
     Invoke-TestCase "native-args-ansi" {
         Invoke-CLILoaderCase -Label "native-args-ansi" -InputPath $ImportsDll -Options @("-method", "RunArgsA", "-args", "churro-ansi-argument") -Markers @{
             ".args-ansi" = "ANSI argument received"

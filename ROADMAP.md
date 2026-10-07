@@ -65,13 +65,15 @@ loader rebuild passed. Windows execution evidence is recorded below.
 - [x] Include payload type, native or managed invocation, and the complete
   credential-free staged URL in the CLI success report; focused Go tests pass.
 - [x] Accept Fritter native CLI help and attached-value spellings, including
-  `-?` and `-o:path`, and continue parsing options after stray positionals.
+  `-?`, `-opath`, `-o:path`, and an empty delimiter followed by a separate
+  value; continue parsing options after stray positionals.
 - [x] Select EXE versus DLL behavior from PE headers for files with `.exe` or
   `.dll` names, including renamed native and managed images.
 
 Churro wraps invalid generation inputs in `GenerationError` so callers can use
 stable codes. The underlying `ValidationError` remains available through
 `errors.As`; Fritter returns it directly at the top level.
+
 Churro's CLI defaults to `EntropyDefault` and aPLib, following Fritter's
 native C CLI. Fritter's older Go/WASM CLI defaults to `EntropyNone` and no
 compression; `-entropy none -compression none` selects those settings in
@@ -119,8 +121,10 @@ Churro without using WASM.
   Windows after the native dispatch change.
 - [x] Execute `ExitProcess` and `ExitBlock` as bounded CLI cases with markers.
 - [x] Execute native DLL loaders with `EntropyNone` and `EntropyNames`.
-- [ ] Execute the legacy colon-option CLI and renamed native/managed EXE/DLL
+- [x] Execute the legacy colon-option CLI and renamed native/managed EXE/DLL
   fixtures through the public CLI on Windows.
+- [ ] Execute native bare-attached and empty-delimiter option spellings through
+  the public CLI on Windows.
 - [x] Execute a native DLL ANSI export argument containing non-ASCII text under
   Windows ANSI code page 1252 after the native loader rebuild.
 - [x] Re-run the full Windows payload, CLR v2, custom-bundle, and clipboard

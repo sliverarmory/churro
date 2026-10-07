@@ -47,9 +47,11 @@ aliases include `rb`, `py`, `ps`, and `cs`; exit accepts `1` to `3`, entropy
 accepts `1` to `3` and `none`/`low`/`full`, and headers accepts `1` or `2`.
 The CLI's default entropy is `default` (names and crypto).
 Legacy long aliases `-file`, `-function`, `-params`, and `-oep` are accepted.
-`-?` opens help. String flags also accept attached colon values, such as
-`-o:loader.bin` or `--server:https://example.test/`. Flags are recognized
-after stray positional words; the input still requires `-input` or `-i`.
+`-?` opens help. String flags also accept native attached values, such as
+`-oloader.bin`, `-o:loader.bin`, or `--server:https://example.test/`. An empty
+colon or equals delimiter takes the next argument (`-o: loader.bin`). Flags
+are recognized after stray positional words; the input still requires
+`-input` or `-i`.
 The deprecated `-chunked` (`-g`) flag accepts `0` or `1` for command-line
 compatibility; the dispatch shim is always used.
 

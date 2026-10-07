@@ -250,10 +250,10 @@ func runWithClipboard(args []string, stdout, stderr io.Writer, copyClipboard fun
 	return 0
 }
 
-// nativeCompatibleFlagArgs accepts Fritter's attached colon values and scans
-// past stray positional arguments. Only registered string flags are rewritten;
-// the value after the first colon remains untouched, including URL schemes and
-// Windows drive letters. Unknown options remain for FlagSet.Parse to reject.
+// nativeCompatibleFlagArgs accepts Fritter's attached string values and scans
+// past stray positional arguments. The longest registered flag name wins, so
+// -outputFILE is not mistaken for -o with the value utputFILE. Options without
+// a registered string-flag prefix remain for FlagSet.Parse to reject.
 func nativeCompatibleFlagArgs(flags *flag.FlagSet, args []string) []string {
 	parsed := make([]string, 0, len(args))
 	for i := 0; i < len(args); i++ {
@@ -273,17 +273,28 @@ func nativeCompatibleFlagArgs(flags *flag.FlagSet, args []string) []string {
 		}
 		name := option
 		attached := false
-		colon := strings.IndexByte(option, ':')
-		equals := strings.IndexByte(option, '=')
-		switch {
-		case equals >= 0 && (colon < 0 || equals < colon):
-			name = option[:equals]
-			attached = true
-		case colon >= 0:
-			candidate := option[:colon]
-			if registeredStringFlag(flags.Lookup(candidate)) {
-				name = candidate
-				arg = prefix + name + "=" + option[colon+1:]
+		if delimiter := strings.IndexAny(option, ":="); delimiter >= 0 &&
+			registeredStringFlag(flags.Lookup(option[:delimiter])) {
+			name = option[:delimiter]
+			value := option[delimiter+1:]
+			if value != "" {
+				arg = prefix + name + "=" + value
+				attached = true
+			} else {
+				arg = prefix + name
+			}
+		} else if flags.Lookup(option) == nil {
+			bestName := ""
+			flags.VisitAll(func(candidate *flag.Flag) {
+				if len(candidate.Name) <= len(bestName) || len(candidate.Name) >= len(option) ||
+					!registeredStringFlag(candidate) || !strings.HasPrefix(option, candidate.Name) {
+					return
+				}
+				bestName = candidate.Name
+			})
+			if bestName != "" {
+				name = bestName
+				arg = prefix + name + "=" + option[len(name):]
 				attached = true
 			}
 		}

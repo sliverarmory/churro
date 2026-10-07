@@ -5,9 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"flag"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -124,6 +126,70 @@ func TestCLIHelpExitsSuccessfully(t *testing.T) {
 			}
 			if !strings.Contains(stderr.String(), "-input") || !strings.Contains(stderr.String(), "-compression") {
 				t.Fatalf("help output omits CLI options: %q", stderr.String())
+			}
+		})
+	}
+}
+
+func TestNativeCompatibleFlagArgs(t *testing.T) {
+	flags := flag.NewFlagSet("test", flag.ContinueOnError)
+	for _, name := range []string{"i", "input", "o", "output", "oep"} {
+		flags.String(name, "", "")
+	}
+	flags.Bool("thread", false, "")
+	for _, test := range []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{name: "short bare attached", args: []string{"-iFILE", "-oFILE"}, want: []string{"-i=FILE", "-o=FILE"}},
+		{name: "long bare attached", args: []string{"--inputFILE", "--outputFILE"}, want: []string{"--input=FILE", "--output=FILE"}},
+		{name: "longest name", args: []string{"-inputFILE", "-outputFILE", "-oepABCD"}, want: []string{"-input=FILE", "-output=FILE", "-oep=ABCD"}},
+		{name: "drive letter", args: []string{`-iC:\payload.dll`}, want: []string{`-i=C:\payload.dll`}},
+		{name: "empty colon", args: []string{"-o:", "FILE", "--output:", "OTHER"}, want: []string{"-o", "FILE", "--output", "OTHER"}},
+		{name: "empty equals", args: []string{"-o=", "FILE", "--output=", "OTHER"}, want: []string{"-o", "FILE", "--output", "OTHER"}},
+		{name: "unknown and boolean", args: []string{"stray", "-unknown:value", "-thread=false"}, want: []string{"-unknown:value", "-thread=false"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := nativeCompatibleFlagArgs(flags, test.args); !slices.Equal(got, test.want) {
+				t.Fatalf("normalized args = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestCLICompatibleAttachedFlags(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "payload.vbs")
+	if err := os.WriteFile(input, []byte(`WScript.Echo "hello"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name         string
+		inputPrefix  string
+		outputPrefix string
+		separate     bool
+	}{
+		{name: "short bare", inputPrefix: "-i", outputPrefix: "-o"},
+		{name: "long bare", inputPrefix: "--input", outputPrefix: "--output"},
+		{name: "short empty colon", inputPrefix: "-i:", outputPrefix: "-o:", separate: true},
+		{name: "long empty equals", inputPrefix: "--input=", outputPrefix: "--output=", separate: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			output := filepath.Join(dir, test.name+".bin")
+			args := []string{test.inputPrefix}
+			if test.separate {
+				args = append(args, input, test.outputPrefix, output)
+			} else {
+				args[0] += input
+				args = append(args, test.outputPrefix+output)
+			}
+			var stdout, stderr bytes.Buffer
+			if code := run(args, &stdout, &stderr); code != 0 {
+				t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+			}
+			if data, err := os.ReadFile(output); err != nil || len(data) == 0 {
+				t.Fatalf("output %q: bytes=%d err=%v", output, len(data), err)
 			}
 		})
 	}
