@@ -1,0 +1,56 @@
+name: Windows end-to-end
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  libraries:
+    name: Native and Go DLL loaders
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Test Go packages
+        run: go test ./...
+      - name: Generate and execute Windows DLL loaders
+        shell: pwsh
+        run: ./scripts/test-windows-e2e.ps1
+
+  sliver-session:
+    name: Generated Sliver DLL opens a session
+    runs-on: windows-2022
+    timeout-minutes: 180
+    steps:
+      - name: Check out Churro
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check out pinned Sliver
+        uses: actions/checkout@v7
+        with:
+          repository: BishopFox/sliver
+          ref: 1c5d8ab5a928a5dbfbb00be3b5b1c3c2ffc68fb7
+          path: sliver
+          persist-credentials: false
+      - name: Set up Go for Sliver
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: sliver/go.mod
+          cache: true
+          cache-dependency-path: sliver/go.sum
+      - name: Generate Sliver DLL, run Churro loader, and require session-open event
+        shell: pwsh
+        run: ./scripts/test-windows-sliver.ps1
