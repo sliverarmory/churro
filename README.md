@@ -13,7 +13,7 @@ The generator and CLI are Go code and do not use cgo. Like
 [Beignet](https://github.com/sliverarmory/beignet), Churro embeds checked-in
 native loader blobs. Their source is derived from Fritter at
 [`ff952a22`](https://github.com/sliverarmory/Fritter/commit/ff952a22b1cf06d41b3781ab7c20f608b9754e53)
-with a local TLS callback fix and named MinGW code sections. The blobs execute
+with a local TLS callback fix and named PE code sections. The blobs execute
 as native code inside a Windows process. Go consumers do not need a C compiler,
 Zig, WebAssembly, or a sidecar executable.
 
@@ -27,14 +27,15 @@ make test
 ```
 
 The checked-in loader blobs and their metadata are build inputs. To regenerate
-them from the source in this repository, install a host C compiler and an x64
-MinGW cross compiler, then run `make loader-assets`. The default rebuild uses
-the pinned constants. Run
+them from the source in this repository, install Zig 0.17.0 and run
+`make loader-assets`. Zig's C compiler builds both the host extractor and the
+Windows loader images; no separate MinGW installation is required. The default
+rebuild uses the pinned constants. Run
 `./scripts/rebuild-loader-blobs.sh --rotate --output-dir DIR` to create a
 custom bundle with fresh cipher/hash constants and API ordering;
 `--seed N` makes that rotation reproducible. See
-[`internal/loader/README.md`](internal/loader/README.md). Zig is optional and
-is not used in the tested rebuild path. Normal Go builds need neither compiler.
+[`internal/loader/README.md`](internal/loader/README.md). Normal Go builds need
+only Go.
 
 The generated CLI accepts Windows x64 `.exe` and `.dll` images, plus `.vbs`
 and `.js` source. Native and managed PE inputs are selected from the PE
@@ -109,8 +110,8 @@ build constants and code images.
 
 ## Loader architecture
 
-The checked-in MinGW loader has six code sections and a metadata table for
-cross-section calls. Churro's Go generator rewrites protected calls through
+The checked-in native Windows loader has six code sections and a metadata table
+for cross-section calls. Churro's Go generator rewrites protected calls through
 dispatch thunks and encrypts five sections independently. A synchronized
 dispatcher keeps each section decrypted while calls are active, including
 concurrent calls into the hash resolver. The entry `.text` section stays

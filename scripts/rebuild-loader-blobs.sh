@@ -5,8 +5,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_dir="${root}/internal/loader"
 custom_source=false
 assets_dir="${root}/internal/assets"
-host_cc="${HOST_CC:-cc}"
-mingw_cc="${MINGW_CC:-x86_64-w64-mingw32-gcc}"
+zig="${ZIG:-zig}"
 output_dir="${assets_dir}"
 seed="${CHURRO_BUILD_SEED:-}"
 rotate=false
@@ -60,6 +59,24 @@ if [[ "${custom_source}" == true && "${output_dir}" == "${assets_dir}" ]]; then
   exit 2
 fi
 
+if ! command -v "${zig}" >/dev/null 2>&1; then
+  echo "Zig 0.17.0 is required to rebuild the native loader" >&2
+  exit 1
+fi
+zig_version="$("${zig}" version)"
+if [[ "${zig_version}" != "0.17.0" ]]; then
+  echo "Zig 0.17.0 is required to rebuild the native loader (found ${zig_version})" >&2
+  exit 1
+fi
+# The Windows image is linked without a C runtime. Point Zig's C frontend
+# at the Windows headers shipped inside the pinned Zig distribution.
+zig_lib_dir="$("${zig}" env | sed -n 's/^[[:space:]]*\.lib_dir = "\(.*\)",[[:space:]]*$/\1/p')"
+zig_windows_headers="${zig_lib_dir}/libc/include/any-windows-any"
+if [[ -z "${zig_lib_dir}" || ! -f "${zig_windows_headers}/windows.h" ]]; then
+  echo "could not find Windows headers in Zig 0.17.0's bundled library" >&2
+  exit 1
+fi
+
 if [[ "${rotate}" != true && "${custom_source}" != true ]]; then
   for header in poly_seed.h api_shuffle.h api_master.h; do
     if ! cmp -s "${source_dir}/include/${header}" "${assets_dir}/${header}"; then
@@ -71,6 +88,7 @@ fi
 
 build_dir="$(mktemp -d "${TMPDIR:-/tmp}/churro-loader.XXXXXXXX")"
 trap 'rm -rf "${build_dir}"' EXIT
+export ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-${build_dir}/zig-cache}"
 work_source="${build_dir}/source"
 staged="${build_dir}/bundle"
 cp -R "${source_dir}" "${work_source}"
@@ -89,16 +107,22 @@ if [[ "${rotate}" == true ]]; then
   "${build_dir}/buildmeta" rotate "${work_source}/include" "${seed}"
 fi
 
-"${host_cc}" -I "${work_source}/include" \
+"${zig}" cc -O2 -I "${work_source}/include" \
   "${work_source}/exe2h/exe2h.c" -o "${build_dir}/exe2h"
 
 loader_flags=(
-  -fno-toplevel-reorder
+  -target x86_64-windows-gnu
+  -DWIN32_LEAN_AND_MEAN
   -fno-builtin
   -fpack-struct=8
   -fPIC
   -O1
   -nostdlib
+  -fno-jump-tables
+  -fno-optimize-sibling-calls
+  -fno-vectorize
+  -fno-slp-vectorize
+  -isystem "${zig_windows_headers}"
 )
 loader_sources=(
   "${work_source}/loader/loader.c"
@@ -110,9 +134,10 @@ loader_sources=(
 
 for order in 1 2; do
   name="loader_peb${order}"
-  "${mingw_cc}" -D"PEB_WALK_ORDER=${order}" \
+  "${zig}" cc -D"PEB_WALK_ORDER=${order}" \
     "${loader_flags[@]}" "${loader_sources[@]}" \
-    -I "${work_source}/include" -o "${build_dir}/${name}.exe"
+    -I "${work_source}/include" -Wl,--entry,FritterLoader \
+    -o "${build_dir}/${name}.exe"
   (cd "${build_dir}" && ./exe2h "${name}.exe")
   "${build_dir}/header2bin" \
     "${build_dir}/${name}_exe_x64.h" "${staged}/${name}_exe_x64.bin"
@@ -122,9 +147,10 @@ for order in 1 2; do
     "${staged}/${name}_metadata.json"
 done
 
-"${mingw_cc}" "${loader_flags[@]}" \
+"${zig}" cc "${loader_flags[@]}" \
   "${work_source}/loader/dispatch_shim.c" \
-  -I "${work_source}/include" -o "${build_dir}/dispatch_shim.exe"
+  -I "${work_source}/include" -Wl,--entry,DispatchShimEntry \
+  -o "${build_dir}/dispatch_shim.exe"
 (cd "${build_dir}" && ./exe2h dispatch_shim.exe)
 "${build_dir}/header2bin" \
   "${build_dir}/dispatch_shim_exe_x64.h" "${staged}/dispatch_shim_exe_x64.bin"
@@ -140,6 +166,19 @@ fi
 for header in poly_seed.h api_shuffle.h api_master.h; do
   cp "${work_source}/include/${header}" "${staged}/${header}"
 done
+
+# Read the finished bundle through the public Go CLI and exercise the
+# call-dispatch preparation before any embedded asset is replaced.
+(cd "${root}" && GOCACHE="${go_cache}" GOMODCACHE="${go_module_cache}" \
+  go build -o "${build_dir}/churro-gen" ./cmd/churro-gen)
+"${build_dir}/churro-gen" \
+  -input "${root}/testdata/windows-e2e/hello.js" \
+  -loader-bundle "${staged}" \
+  -output "${build_dir}/loader-smoke.bin" >/dev/null
+if [[ ! -s "${build_dir}/loader-smoke.bin" ]]; then
+  echo "Zig loader bundle did not generate shellcode" >&2
+  exit 1
+fi
 
 mkdir -p "${output_dir}"
 for file in \

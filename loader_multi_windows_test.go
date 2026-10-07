@@ -103,10 +103,7 @@ func runProtectedHashContention(seed byte) error {
 	if err != nil {
 		return fmt.Errorf("prepare actual protected dispatcher: %w", err)
 	}
-	const shimPadded = 4096
-	if len(assets.DispatchShim) > shimPadded {
-		return fmt.Errorf("test requires a one-page dispatch shim")
-	}
+	shimPadded := (len(assets.DispatchShim) + 4095) &^ 4095
 	marker := []byte{0xb1, 0x7a, 0x7e, 0xf1, 0xb1, 0x7a, 0x7e, 0xf1}
 	ft := bytes.Index(assets.DispatchShim, marker)
 	if ft < 0 {
@@ -157,17 +154,17 @@ func runProtectedHashContention(seed byte) error {
 		word, err := hashStressReadUint32(code + uintptr(stateWordOffset))
 		return uint16(word >> 16), err
 	}
-	first, _, callErr := hashStressCreateThread.Call(0, 0, code+shimPadded, shared, 0, 0)
+	first, _, callErr := hashStressCreateThread.Call(0, 0, code+uintptr(shimPadded), shared, 0, 0)
 	if first == 0 {
 		return fmt.Errorf("CreateThread first: %v", callErr)
 	}
 	if err := waitForHashState("first", readEntered, readState, 1, 1); err != nil {
 		return err
 	}
-	if got, err := hashStressReadMemory(code+shimPadded+hashOffset, len(hashBody)); err != nil || !bytes.Equal(got, hashBody) {
+	if got, err := hashStressReadMemory(code+uintptr(shimPadded)+hashOffset, len(hashBody)); err != nil || !bytes.Equal(got, hashBody) {
 		return fmt.Errorf("first active call did not leave the hash section decrypted")
 	}
-	second, _, callErr := hashStressCreateThread.Call(0, 0, code+shimPadded, shared, 0, 0)
+	second, _, callErr := hashStressCreateThread.Call(0, 0, code+uintptr(shimPadded), shared, 0, 0)
 	if second == 0 {
 		return fmt.Errorf("CreateThread second: %v", callErr)
 	}
@@ -182,7 +179,7 @@ func runProtectedHashContention(seed byte) error {
 	if firstErr != nil || secondErr != nil || firstRelease != 0 || secondRelease != 0 {
 		return fmt.Errorf("release changed before overlap was observed")
 	}
-	if got, err := hashStressReadMemory(code+shimPadded+hashOffset, len(hashBody)); err != nil || !bytes.Equal(got, hashBody) {
+	if got, err := hashStressReadMemory(code+uintptr(shimPadded)+hashOffset, len(hashBody)); err != nil || !bytes.Equal(got, hashBody) {
 		return fmt.Errorf("concurrent calls corrupted the decrypted hash section")
 	}
 	if err := hashStressWriteUint32(shared+8, 1); err != nil {
@@ -197,7 +194,7 @@ func runProtectedHashContention(seed byte) error {
 	if wait, _, _ := hashStressWaitForSingleObject.Call(first, 0); wait != hashStressWaitTimeout {
 		return fmt.Errorf("first caller did not remain active while second returned: wait=0x%x", wait)
 	}
-	if got, err := hashStressReadMemory(code+shimPadded+hashOffset, len(hashBody)); err != nil || !bytes.Equal(got, hashBody) {
+	if got, err := hashStressReadMemory(code+uintptr(shimPadded)+hashOffset, len(hashBody)); err != nil || !bytes.Equal(got, hashBody) {
 		return fmt.Errorf("second return encrypted code still used by first caller")
 	}
 	if err := hashStressWriteUint32(shared+4, 1); err != nil {
@@ -209,7 +206,7 @@ func runProtectedHashContention(seed byte) error {
 	if err := waitForHashState("completed", readEntered, readState, 2, 0); err != nil {
 		return err
 	}
-	if got, err := hashStressReadMemory(code+shimPadded+hashOffset, len(hashBody)); err != nil || !bytes.Equal(got, wantCiphertext) {
+	if got, err := hashStressReadMemory(code+uintptr(shimPadded)+hashOffset, len(hashBody)); err != nil || !bytes.Equal(got, wantCiphertext) {
 		return fmt.Errorf("hash section did not return to its original ciphertext")
 	}
 	hashStressCloseHandle.Call(first)

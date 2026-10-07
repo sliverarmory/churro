@@ -1,6 +1,6 @@
 /* pack.h - multi-section blob packer for exe2h.
  *
- * When exe2h extracts a multi-section MSVC build (per-function PE
+ * When exe2h extracts a multi-section Windows build (per-function PE
  * sections from loader/include/poly_section.h), the default
  * RVA-preserving extraction leaves large NOP runs between sections
  * (~46% of the blob for a typical loader). Those runs are a
@@ -16,12 +16,13 @@
  *      hot loops can't straddle page boundaries - preserves the
  *      cross-page-loop invariant established by per-function PE
  *      sections under MSVC).
- *   3. Copies each section to its new offset and rewrites every
- *      cross-section disp32.
+ *   3. Appends read-only data as resident bytes, copies each section to
+ *      its new offset, and rewrites every cross-section disp32. Only
+ *      code-to-code references enter the dispatch metadata.
  *
- * The LDE covers the subset MSVC /Os /O1 emits for our codebase.
- * Any undecodable byte aborts the pack and falls through to the
- * original RVA-preserving (NOP-fill) extraction.
+ * The LDE covers the subset emitted for our codebase. Any undecodable
+ * or unsupported reference aborts extraction rather than emitting a
+ * blob with an invalid relative target.
  */
 
 #ifndef FRITTER_EXE2H_PACK_H
@@ -161,6 +162,7 @@ typedef struct {
   int length;
   int rip_disp_off;    /* offset within instr of RIP-relative disp32, or -1 */
   int rel32_disp_off;  /* offset within instr of REL32 (E8/E9/0F 8x) disp, or -1 */
+  int rel8_disp_off;   /* offset within instr of short relative branch, or -1 */
 } lde_inst_t;
 
 /* Decode one instruction. Returns 1 on success, 0 on undecodable. */
@@ -174,6 +176,7 @@ static int lde_decode(const uint8_t *p, size_t max, lde_inst_t *out) {
   out->length = 0;
   out->rip_disp_off = -1;
   out->rel32_disp_off = -1;
+  out->rel8_disp_off = -1;
 
   /* Legacy prefixes */
   while(pos < max && prefix_count < 4) {
@@ -274,7 +277,10 @@ static int lde_decode(const uint8_t *p, size_t max, lde_inst_t *out) {
     else if(op_size_16) pos += 2;
     else pos += 4;
   }
-  if(flags & LDE_F_REL8) pos += 1;
+  if(flags & LDE_F_REL8) {
+    out->rel8_disp_off = (int)pos;
+    pos += 1;
+  }
   if(flags & LDE_F_REL32) {
     out->rel32_disp_off = (int)pos;
     pos += op_size_16 ? 2 : 4;
@@ -288,8 +294,7 @@ static int lde_decode(const uint8_t *p, size_t max, lde_inst_t *out) {
 /* ============================================================
  * Deterministic-random byte fill for inter-section gaps.
  *
- * Used by both the packer and the RVA-preserving fallback in
- * exe2h.c. NOT a CSPRNG - just an LCG seeded from a fingerprint
+ * Used by the packer. NOT a CSPRNG - just an LCG seeded from a fingerprint
  * of the first section's bytes. Properties we need:
  *
  *   1. Output is build-stable (same input -> same fill bytes),
@@ -337,7 +342,7 @@ typedef struct {
   uint32_t file_off;        /* PointerToRawData */
   uint32_t copy_size;       /* min(VirtualSize, SizeOfRawData) */
   uint32_t new_offset;      /* assigned offset in packed blob */
-  int      single_page;     /* must fit in a single 4 KiB page */
+  int      single_page;     /* executable section must fit in a 4 KiB page */
 } pack_sec_t;
 
 typedef struct {
@@ -349,17 +354,7 @@ typedef struct {
   uint32_t target_sec;      /* index into sections[] */
 } pack_ref_t;
 
-/* Public-facing wrapper used by the RVA-preserving fallback in
-   exe2h.c. Seeds the LCG from the first section's bytes so the
-   fill is deterministic per build. */
-static void pack_random_fill(uint8_t *blob, uint32_t size,
-                             const uint8_t *map, const pack_sec_t *first_sec)
-{
-  pack_random_fill_impl(blob, size,
-                        map + first_sec->file_off, first_sec->copy_size);
-}
-
-/* Find section index for an RVA; returns -1 if not in any code section. */
+/* Find section index for an RVA; returns -1 if it is outside the blob. */
 static int pack_find_section(const pack_sec_t *sections, int n, uint32_t rva) {
   int i;
   for(i = 0; i < n; i++) {
@@ -369,8 +364,9 @@ static int pack_find_section(const pack_sec_t *sections, int n, uint32_t rva) {
   return -1;
 }
 
-/* Walk a section, collect cross-section RIP-rel / REL32 references.
-   Returns 0 on undecodable byte (caller should fall back).  */
+/* Walk one code section, collecting references to other packed sections.
+   Any RIP-relative or REL32 target outside the blob is unsafe: its original
+   PE address will not exist in the extracted image. */
 static int pack_find_refs(const uint8_t *map, pack_sec_t *sections, int n_sec,
                           int sec_idx, pack_ref_t **refs, int *n_refs, int *cap_refs)
 {
@@ -387,24 +383,46 @@ static int pack_find_refs(const uint8_t *map, pack_sec_t *sections, int n_sec,
       return 0;
     }
 
+    if(inst.rel8_disp_off >= 0) {
+      int8_t disp = (int8_t)sb[pos + inst.rel8_disp_off];
+      uint32_t target_rva = sec->vaddr + pos + inst.length + disp;
+      if(pack_find_section(sections, n_sec, target_rva) != sec_idx) {
+        printf("  [   unsupported short branch in '%s' at +0x%x to RVA 0x%x\n",
+               sec->name, pos, target_rva);
+        return 0;
+      }
+    }
+
     /* Inspect both RIP-relative and REL32 displacements */
     int disp_offs[2] = { inst.rip_disp_off, inst.rel32_disp_off };
     int k;
     for(k = 0; k < 2; k++) {
       int doff = disp_offs[k];
       if(doff < 0) continue;
+      if(doff + 4 > inst.length) {
+        printf("  [   unsupported short displacement in '%s' at +0x%x\n",
+               sec->name, pos);
+        return 0;
+      }
       int32_t disp;
       memcpy(&disp, sb + pos + doff, 4);
       uint32_t inst_end_rva = sec->vaddr + pos + inst.length;
       uint32_t target_rva = inst_end_rva + (uint32_t)disp;
       int tgt_sec = pack_find_section(sections, n_sec, target_rva);
-      if(tgt_sec < 0 || tgt_sec == sec_idx) continue;
+      if(tgt_sec < 0) {
+        printf("  [   unsupported relative target in '%s' at +0x%x: RVA 0x%x is not packed\n",
+               sec->name, pos, target_rva);
+        return 0;
+      }
+      if(tgt_sec == sec_idx) continue;
 
       /* Cross-section ref */
       if(*n_refs == *cap_refs) {
         int new_cap = (*cap_refs) * 2;
         if(new_cap == 0) new_cap = 32;
-        *refs = (pack_ref_t*)realloc(*refs, new_cap * sizeof(pack_ref_t));
+        pack_ref_t *grown = (pack_ref_t*)realloc(*refs, new_cap * sizeof(pack_ref_t));
+        if(grown == NULL) return 0;
+        *refs = grown;
         *cap_refs = new_cap;
       }
       pack_ref_t *r = &(*refs)[(*n_refs)++];
@@ -422,15 +440,16 @@ static int pack_find_refs(const uint8_t *map, pack_sec_t *sections, int n_sec,
 }
 
 /* Plan layout: section 0 (the entry-point .text) is fixed at offset 0.
-   Other sections are reordered to minimize total size while keeping
-   each single_page section entirely within one 4 KiB page.
-   Brute-force over permutations (n! - feasible for n <= 7). */
-static uint32_t pack_eval_layout(const pack_sec_t *sections, const int *order, int n) {
+   Other code sections are reordered to minimize total size while keeping
+   each single_page section within one 4 KiB page. Read-only data follows
+   the code at a page boundary to preserve its PE alignment. */
+static uint32_t pack_eval_layout(const pack_sec_t *sections, const int *order,
+                                 int n_code, int n_sec) {
   uint32_t offset = 0;
   int i;
   /* First section (index 0 in original order, the .text) at offset 0 */
   offset = sections[0].vsize;
-  for(i = 1; i < n; i++) {
+  for(i = 1; i < n_code; i++) {
     const pack_sec_t *s = &sections[order[i]];
     uint32_t sz = s->vsize;
     if(s->single_page) {
@@ -441,15 +460,20 @@ static uint32_t pack_eval_layout(const pack_sec_t *sections, const int *order, i
     }
     offset += sz;
   }
+  for(i = n_code; i < n_sec; i++) {
+    offset = (offset + PACK_PAGE - 1) & ~(PACK_PAGE - 1);
+    offset += sections[i].vsize;
+  }
   return offset;
 }
 
-static void pack_apply_layout(pack_sec_t *sections, const int *order, int n) {
+static void pack_apply_layout(pack_sec_t *sections, const int *order,
+                              int n_code, int n_sec) {
   uint32_t offset = 0;
   int i;
   sections[0].new_offset = 0;
   offset = sections[0].vsize;
-  for(i = 1; i < n; i++) {
+  for(i = 1; i < n_code; i++) {
     pack_sec_t *s = &sections[order[i]];
     if(s->single_page) {
       if((offset >> 12) != ((offset + s->vsize - 1) >> 12))
@@ -457,6 +481,11 @@ static void pack_apply_layout(pack_sec_t *sections, const int *order, int n) {
     }
     s->new_offset = offset;
     offset += s->vsize;
+  }
+  for(i = n_code; i < n_sec; i++) {
+    offset = (offset + PACK_PAGE - 1) & ~(PACK_PAGE - 1);
+    sections[i].new_offset = offset;
+    offset += sections[i].vsize;
   }
 }
 
@@ -466,7 +495,7 @@ static void pack_search(int *cur, int depth, int n, int *used,
                         uint32_t *best_size, int *best_order)
 {
   if(depth == n) {
-    uint32_t sz = pack_eval_layout(sections, cur, n);
+    uint32_t sz = pack_eval_layout(sections, cur, n, n);
     if(sz < *best_size) {
       *best_size = sz;
       memcpy(best_order, cur, n * sizeof(int));
@@ -483,15 +512,16 @@ static void pack_search(int *cur, int depth, int n, int *used,
   }
 }
 
-/* Main packer entry. Returns malloced packed blob and sets *out_size,
-   or NULL on failure (caller falls back to NOP-fill extraction).
+/* Main packer entry. The first n_code entries are executable sections;
+   any remaining entries are read-only data. Returns NULL on failure.
 
    out_refs / out_n_refs (optional, pass NULL to discard): on success,
    the caller receives ownership of a malloced pack_ref_t[] recording
    every cross-section RIP-rel/REL32 fixup applied to the blob. Used
    by exe2h to emit the ref_table companion header for fritter's thunk
    generation. Caller must free(*out_refs). */
-static uint8_t *pack_extract(const uint8_t *map, pack_sec_t *sections, int n_sec,
+static uint8_t *pack_extract(const uint8_t *map, pack_sec_t *sections,
+                             int n_code, int n_sec,
                              uint32_t *out_size,
                              pack_ref_t **out_refs, int *out_n_refs)
 {
@@ -507,10 +537,10 @@ static uint8_t *pack_extract(const uint8_t *map, pack_sec_t *sections, int n_sec
   lde_init_tables();
 
   /* Find all cross-section refs */
-  printf("  [ packer: walking %d code section(s) for cross-section refs\n", n_sec);
-  for(i = 0; i < n_sec; i++) {
+  printf("  [ packer: walking %d code section(s) for cross-section refs\n", n_code);
+  for(i = 0; i < n_code; i++) {
     if(!pack_find_refs(map, sections, n_sec, i, &refs, &n_refs, &cap_refs)) {
-      printf("  [ packer: LDE failed in section '%s' - falling back\n",
+      printf("  [ packer: unsupported instruction or reference in section '%s'\n",
              sections[i].name);
       free(refs);
       return NULL;
@@ -518,26 +548,69 @@ static uint8_t *pack_extract(const uint8_t *map, pack_sec_t *sections, int n_sec
   }
   printf("  [ packer: %d cross-section reference(s) found\n", n_refs);
 
+  /* Linkers may emit .rdata solely for PE unwind metadata, which is not
+     used by this extracted shellcode. Keep only data sections actually
+     referenced by the copied instructions. Code indexes stay unchanged. */
+  int data_used[PACK_MAX_SECTIONS] = {0};
+  int remap[PACK_MAX_SECTIONS];
+  for(i = 0; i < n_refs; i++) {
+    if(refs[i].target_sec >= (uint32_t)n_code)
+      data_used[refs[i].target_sec] = 1;
+  }
+  int packed_count = n_code;
+  for(i = n_code; i < n_sec; i++) {
+    if(!data_used[i]) continue;
+    remap[i] = packed_count;
+    sections[packed_count++] = sections[i];
+  }
+  for(i = 0; i < n_refs; i++) {
+    if(refs[i].target_sec >= (uint32_t)n_code)
+      refs[i].target_sec = remap[refs[i].target_sec];
+  }
+  n_sec = packed_count;
+
+  /* Protected code can be entered only through the Go dispatcher's call
+     thunks. A tail JMP, conditional branch, or RIP-relative data access
+     into a protected section cannot be redirected with call semantics. */
+  for(i = 0; i < n_refs; i++) {
+    pack_ref_t *r = &refs[i];
+    if(r->target_sec >= (uint32_t)n_code ||
+       strncmp(sections[r->target_sec].name, ".text", 5) == 0)
+      continue;
+    const uint8_t *inst = map + sections[r->src_sec].file_off + r->src_offset;
+    if(r->inst_length != 5 || r->disp_offset != 1 || inst[0] != 0xe8) {
+      printf("  [ packer: unsupported non-CALL reference from '%s' +0x%x into protected '%s'\n",
+             sections[r->src_sec].name, r->src_offset,
+             sections[r->target_sec].name);
+      free(refs);
+      return NULL;
+    }
+  }
+
   /* Plan layout: enumerate permutations of indices [1..n-1] */
   order[0] = 0;
   for(i = 1; i < n_sec; i++) order[i] = i;
   used[0] = 1;
-  pack_search(order, 1, n_sec, used, sections, &best_size, best_order);
+  pack_search(order, 1, n_code, used, sections, &best_size, best_order);
   best_order[0] = 0;
-  pack_apply_layout(sections, best_order, n_sec);
+  /* The search minimizes code layout. Data always follows at page
+     alignment, so account for it after selecting the code order. */
+  pack_apply_layout(sections, best_order, n_code, n_sec);
+  best_size = pack_eval_layout(sections, best_order, n_code, n_sec);
 
   uint32_t code_bytes = 0;
   for(i = 0; i < n_sec; i++) code_bytes += sections[i].vsize;
   uint32_t pad_bytes = best_size - code_bytes;
-  printf("  [ packer: layout = %u bytes (%u code + %u pad, %.1f%%)\n",
+  printf("  [ packer: layout = %u bytes (%u section data + %u pad, %.1f%%)\n",
          best_size, code_bytes, pad_bytes, 100.0 * pad_bytes / best_size);
   printf("  [ packer: section placement:\n");
   for(i = 0; i < n_sec; i++) {
-    int oi = best_order[i];
+    int oi = (i < n_code) ? best_order[i] : i;
     const pack_sec_t *s = &sections[oi];
     printf("  [     %-10s -> +0x%05x..0x%05x  (%u bytes%s)\n",
            s->name, s->new_offset, s->new_offset + s->vsize,
-           s->vsize, s->single_page ? ", single-page" : "");
+           s->vsize, i >= n_code ? ", resident data" :
+           (s->single_page ? ", single-page" : ""));
   }
 
   /* Allocate packed blob. Random-fill any padding so the post-XOR
@@ -561,9 +634,11 @@ static uint8_t *pack_extract(const uint8_t *map, pack_sec_t *sections, int n_sec
   for(i = 0; i < n_sec; i++) {
     pack_sec_t *s = &sections[i];
     memcpy(blob + s->new_offset, map + s->file_off, s->copy_size);
-    /* If copy_size < vsize, the remainder stays as random fill (PE rule:
-       beyond SizeOfRawData is zero-initialized in memory; here it's
-       random-initialized which is fine for code that never reads it). */
+    /* PE zero-initializes the virtual tail beyond SizeOfRawData. Data
+       consumers may read it, so preserve that behavior for .rdata. */
+    if(i >= n_code && s->copy_size < s->vsize)
+      memset(blob + s->new_offset + s->copy_size, 0,
+             s->vsize - s->copy_size);
   }
 
   /* Rewrite cross-section displacements */
@@ -578,10 +653,17 @@ static uint8_t *pack_extract(const uint8_t *map, pack_sec_t *sections, int n_sec
     memcpy(blob + src->new_offset + r->src_offset + r->disp_offset, &new_disp, 4);
   }
 
+  /* The Go dispatch table indexes code sections only. Data references were
+     patched above but must not be redirected through call thunks. */
+  int code_refs = 0;
+  for(j = 0; j < n_refs; j++) {
+    if(refs[j].target_sec < (uint32_t)n_code)
+      refs[code_refs++] = refs[j];
+  }
   *out_size = best_size;
   if(out_refs != NULL && out_n_refs != NULL) {
     *out_refs = refs;
-    *out_n_refs = n_refs;
+    *out_n_refs = code_refs;
   } else {
     free(refs);
   }

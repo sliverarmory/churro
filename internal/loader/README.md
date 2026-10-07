@@ -10,7 +10,7 @@ Churro carries these source changes:
 
 - `loader/inmem_pe.c` reads the TLS directory RVA from saved `ntc`, after the
   original mapped header may have been unmapped or overwritten.
-- `include/poly_section.h` uses named MinGW code sections for tagged loader
+- `include/poly_section.h` uses named PE code sections for tagged loader
   functions. `exe2h` packs the six loader sections and emits function and
   cross-section reference tables. `table2json` converts those tables to the
   metadata Churro needs for per-function dispatch.
@@ -20,6 +20,9 @@ Churro carries these source changes:
   written Go encoder for the same token stream; it does not copy a third-party
   packer implementation. The copied Fritter source and our changes are
   distributed under the repository's BSD 3-Clause license.
+- `loader/peb.h` supplies a Windows status typedef needed by Zig's lean target
+  headers, and `loader/dispatch_shim.c` builds API names on the stack so the
+  standalone shim has no read-only data dependency.
 
 In multi-section output, `.text` stays resident. The other five sections use
 call thunks, including `.hash_ch`. The dispatcher uses a per-section lock and
@@ -34,9 +37,9 @@ fixed 64-slot API wire layout unchanged; `GetThreadContext` cannot provide a
 valid context for the current running thread.
 
 `scripts/rebuild-loader-blobs.sh` builds both PEB variants and the dispatch
-shim with x64 MinGW, then emits `*.bin`, `*_metadata.json`, and `bundle.json`
-into `internal/assets/`. It checks the pinned Poly/API headers before a normal
-rebuild. The manifest includes image hashes and the Poly/API metadata compiled
+shim with Zig's C compiler, then emits `*.bin`, `*_metadata.json`, and
+`bundle.json` into `internal/assets/`. It checks the pinned Poly/API headers
+before a normal rebuild. The manifest includes image hashes and the Poly/API metadata compiled
 into those images. `buildmeta` also generates the matching Go defaults in
 `internal/wire/generated_constants.go` for an embedded rebuild.
 
@@ -70,7 +73,13 @@ The generated manifest records the resulting API order, and the Go generator
 preloads added DLLs by basename. `scripts/build-custom-api-test-bundle.sh`
 demonstrates the flow with `advapi32.dll!GetUserNameA`.
 
-The build script uses the host C compiler for `exe2h` and x64 MinGW for the
-Windows images. Zig 0.17.0 was tried on macOS but rejected
-`-fno-toplevel-reorder`; without that flag its Windows GNU target lacked
-target C headers. MinGW is the validated image compiler for this source.
+The build script uses Zig 0.17.0 as the C compiler for both the host `exe2h`
+extractor and the Windows images. The Windows build uses Zig's bundled target
+headers and links without a C runtime. It does not require an external MinGW
+compiler, headers, or libraries.
+
+`exe2h` checks that the PE entry starts `.text`, no imported runtime or packed
+base relocations remain, and every protected cross-section transfer is a
+direct call. It rejects unresolved relative references rather than emitting
+an incomplete loader image. The pinned Zig build disables jump tables; the
+extractor does not rewrite relative code pointers stored inside `.rdata`.

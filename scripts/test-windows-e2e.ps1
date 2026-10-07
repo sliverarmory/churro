@@ -30,22 +30,16 @@ if ($CustomImportBundleDirectory) {
     }
 }
 
-$GccCandidates = @(
-    $env:CC,
-    "C:\msys64\mingw64\bin\gcc.exe",
-    "C:\msys64\ucrt64\bin\gcc.exe",
-    "C:\mingw64\bin\gcc.exe"
-) | Where-Object { $_ -and (Test-Path $_ -PathType Leaf) }
-$Gcc = $GccCandidates | Select-Object -First 1
-if (-not $Gcc) {
-    $Command = Get-Command gcc.exe -ErrorAction SilentlyContinue
-    if ($Command) { $Gcc = $Command.Source }
+$ZigCommand = Get-Command zig.exe -ErrorAction SilentlyContinue
+if (-not $ZigCommand) {
+    throw "Zig is required to build the Windows test fixtures"
 }
-if (-not $Gcc) {
-    throw "No x64 MinGW GCC was found"
+$Zig = $ZigCommand.Source
+$ZigVersion = & $Zig version
+if ($LASTEXITCODE -ne 0 -or $ZigVersion -ne "0.17.0") {
+    throw "Zig 0.17.0 is required to build the Windows test fixtures (found $ZigVersion)"
 }
-$env:PATH = "$(Split-Path $Gcc);$env:PATH"
-$env:CC = $Gcc
+$env:CC = "`"$Zig`" cc -target x86_64-windows-gnu"
 $env:CGO_ENABLED = "1"
 $env:GOOS = "windows"
 $env:GOARCH = "amd64"
@@ -218,19 +212,19 @@ try {
     Invoke-Checked "build public CLI" { go build -o $CliExe ./cmd/churro-gen }
     Invoke-Checked "build runner" { go build -o $RunnerExe ./testdata/windows-e2e/run-shellcode }
     Invoke-Checked "build lifecycle DLL" {
-        & $Gcc -shared -O2 -o $LifecycleDll ./testdata/windows-e2e/native-lifecycle.c
+        & $Zig cc -target x86_64-windows-gnu -shared -O2 -o $LifecycleDll ./testdata/windows-e2e/native-lifecycle.c
     }
     Invoke-Checked "build imports DLL" {
-        & $Gcc -shared -O2 -o $ImportsDll ./testdata/windows-e2e/native-imports.c -luser32
+        & $Zig cc -target x86_64-windows-gnu -shared -O2 -o $ImportsDll ./testdata/windows-e2e/native-imports.c -luser32
     }
     Invoke-Checked "build Go DLL" {
         go build -buildmode=c-shared -o $GoDll ./testdata/windows-e2e/go-dll
     }
     Invoke-Checked "build native EXE" {
-        & $Gcc -O2 -o $NativeExe ./testdata/windows-e2e/native-executable.c
+        & $Zig cc -target x86_64-windows-gnu -O2 -o $NativeExe ./testdata/windows-e2e/native-executable.c
     }
     Invoke-Checked "build host continuation runner" {
-        & $Gcc -O2 -o $ContinuationExe ./testdata/windows-e2e/host-continuation.c
+        & $Zig cc -target x86_64-windows-gnu -O2 -o $ContinuationExe ./testdata/windows-e2e/host-continuation.c
     }
     Invoke-Checked "build staged HTTP and HTTPS test" {
         go build -o $StagedExe ./testdata/windows-e2e/staged

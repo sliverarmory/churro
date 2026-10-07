@@ -46,8 +46,8 @@ DWORD MainProc(PFRITTER_INSTANCE inst);
 DWORD MainProcEntry(PFRITTER_INSTANCE inst);
 
 /* FritterLoader is the PE entry and must be at .text+0 in the
-   extracted blob. MSVC: pin to .text$a so /Gy COMDAT ordering puts it
-   first. mingw: -fno-toplevel-reorder handles it via source order. */
+   extracted blob. The Zig build selects this symbol as the PE entry;
+   exe2h verifies that the linked entry starts the code section. */
 #ifdef _MSC_VER
 __declspec(code_seg(".text$a"))
 #endif
@@ -123,7 +123,7 @@ HANDLE FritterLoader(PFRITTER_INSTANCE inst) {
         /* P3 Site B was attempted here (volatile salt-cancel into a
            mirror of inst->oep, gated on LOADER_POLY_SALT bit 4) but
            empirically failed: under some FritterLoader register-allocation
-           conditions, mingw-w64 GCC -O1 placed the volatile auto in a
+           conditions, a previous GCC -O1 build placed the volatile auto in a
            register and folded the XOR pair into a single un-cancelled
            XOR, corrupting c.Rip and hanging the NtContinue thread.
            Removed; sites A and C cover the default execution path. */

@@ -12,7 +12,7 @@ build:
 test:
 	$(GO) test ./...
 
-# Requires a host C compiler and an x64 MinGW cross compiler.
+# Requires Zig 0.17.0 to build the native Windows loader assets.
 loader-assets:
 	./scripts/rebuild-loader-blobs.sh
 

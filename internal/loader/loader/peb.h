@@ -34,6 +34,10 @@
 
 #include <windows.h>
 
+/* The PEB's status fields use the NT signed 32-bit status type. The
+   lean Windows headers supplied by Zig do not declare it here. */
+typedef LONG NTSTATUS;
+
 typedef void *PPS_POST_PROCESS_INIT_ROUTINE;
 
 typedef struct _LSA_UNICODE_STRING {

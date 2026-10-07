@@ -19,22 +19,21 @@ $BuildPath = if ([System.IO.Path]::IsPathRooted($BuildDirectory)) {
 }
 New-Item -ItemType Directory -Force -Path $BuildPath | Out-Null
 
-$GccCandidates = @(
-    $env:CC,
-    "C:\msys64\mingw64\bin\gcc.exe",
-    "C:\msys64\ucrt64\bin\gcc.exe",
-    "C:\mingw64\bin\gcc.exe"
-) | Where-Object { $_ -and (Test-Path $_ -PathType Leaf) }
-$Gcc = $GccCandidates | Select-Object -First 1
-if (-not $Gcc) {
-    $Command = Get-Command gcc.exe -ErrorAction SilentlyContinue
-    if ($Command) { $Gcc = $Command.Source }
+$ZigCommand = Get-Command zig.exe -ErrorAction SilentlyContinue
+if (-not $ZigCommand) {
+    throw "Zig is required for the Sliver shared-library build"
 }
-if (-not $Gcc) {
-    throw "No x64 MinGW GCC was found for the Sliver shared-library build"
+$Zig = $ZigCommand.Source
+$ZigVersion = & $Zig version
+if ($LASTEXITCODE -ne 0 -or $ZigVersion -ne "0.17.0") {
+    throw "Zig 0.17.0 is required for the Sliver shared-library build (found $ZigVersion)"
 }
-$env:PATH = "$(Split-Path $Gcc);$env:PATH"
-$env:CC = $Gcc
+$env:CC = "`"$Zig`" cc -target x86_64-windows-gnu"
+$env:CXX = "`"$Zig`" c++ -target x86_64-windows-gnu"
+# Sliver chooses a compiler for the generated implant separately from the
+# server's own Go build, using these 64-bit compiler overrides.
+$env:SLIVER_CC_64 = $env:CC
+$env:SLIVER_CXX_64 = $env:CXX
 $env:CGO_ENABLED = "1"
 $env:GOOS = "windows"
 $env:GOARCH = "amd64"
@@ -44,6 +43,27 @@ function Invoke-Checked([string]$Label, [scriptblock]$Command) {
     if ($LASTEXITCODE -ne 0) {
         throw "$Label failed with exit code $LASTEXITCODE"
     }
+}
+
+# This pinned Sliver version skips compiler selection when the server and
+# implant are both Windows/amd64. Its Go build then receives an explicit empty
+# CC value. Patch the CI checkout so generated shared libraries select Zig,
+# and fail inside Sliver if the selected CC/CXX is not Zig.
+$PinnedSliverCommit = "1c5d8ab5a928a5dbfbb00be3b5b1c3c2ffc68fb7"
+$ActualSliverCommit = & git -C $SliverPath rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or $ActualSliverCommit -ne $PinnedSliverCommit) {
+    throw "Sliver checkout must be pinned to $PinnedSliverCommit (found $ActualSliverCommit)"
+}
+$CompilerSourceStatus = & git -C $SliverPath status --porcelain -- server/generate/binaries.go
+if ($LASTEXITCODE -ne 0 -or $CompilerSourceStatus) {
+    throw "Sliver compiler source has local changes; refusing to patch it"
+}
+$SliverZigPatch = Join-Path $Root "scripts/sliver-zig-cshared.patch"
+Invoke-Checked "verify pinned Sliver Zig patch" {
+    & git -C $SliverPath apply --ignore-space-change --check $SliverZigPatch
+}
+Invoke-Checked "apply pinned Sliver Zig patch" {
+    & git -C $SliverPath apply --ignore-space-change $SliverZigPatch
 }
 
 $GeneratorExe = Join-Path $BuildPath "generate.exe"

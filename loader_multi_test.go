@@ -24,7 +24,7 @@ func TestMultiSectionReferencesAndFunctionTable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const loaderStart = 4096
+	loaderStart := (len(assets.DispatchShim) + 4095) &^ 4095
 	prePad := int(seed & 63)
 	dispatchAt := loaderStart + len(assets.LoaderPEB1) + prePad
 	marker := []byte{0xb1, 0x7a, 0x7e, 0xf1, 0xb1, 0x7a, 0x7e, 0xf1}
@@ -135,9 +135,10 @@ func TestHashSectionUsesSynchronizedDispatch(t *testing.T) {
 		t.Fatalf("hash section key/flags/state = %x", entry[8:12])
 	}
 	section := meta.Functions[hashID]
+	loaderStart := (len(assets.DispatchShim) + 4095) &^ 4095
 	for j := uint32(0); j < section.Size; j++ {
 		at := section.Offset + j
-		if combined[4096+at]^entry[8] != assets.LoaderPEB1[at] {
+		if combined[loaderStart+int(at)]^entry[8] != assets.LoaderPEB1[at] {
 			t.Fatalf("hash section byte %d was not encrypted with its key", j)
 		}
 	}

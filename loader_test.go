@@ -45,7 +45,8 @@ func TestLoaderLayoutAndDecoderTargets(t *testing.T) {
 			protectedRefs++
 		}
 	}
-	combinedSize := 4096 + len(assets.LoaderPEB2) + (seed & 63) + dispatchSlotSize + protectedRefs*dispatchThunkSize
+	shimPadded := (len(assets.DispatchShim) + 4095) &^ 4095
+	combinedSize := shimPadded + len(assets.LoaderPEB2) + (seed & 63) + dispatchSlotSize + protectedRefs*dispatchThunkSize
 	combinedAt := len(result) - combinedSize
 	if combinedAt%4096 != 0 {
 		t.Fatalf("shim begins at %d, not a page boundary", combinedAt)

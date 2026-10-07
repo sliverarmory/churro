@@ -44,7 +44,7 @@ loader rebuild passed. Windows execution evidence is recorded below.
 - [x] Support a validated custom native loader bundle with matching cipher and
   API metadata through both the Go API and CLI, without a WASM module.
 - [x] Accept added API imports in a custom native bundle up to the loader's
-  64-slot table limit; a 62-import bundle builds locally through MinGW.
+  64-slot table limit; a 62-import bundle builds locally through Zig.
 - [x] Cover legacy native CLI format/entropy/exit aliases, output naming, and
   staged-module placement where compatibility is useful; document any
   deliberate default differences.
@@ -89,8 +89,8 @@ Churro without using WASM.
 - [x] Add aPLib-compatible payload compression in the Go generator; Go tests
   round-trip packed data through `referenceDepack`, and Windows execution tests
   exercise the native C loader's depacker. Keep source provenance clear.
-- [x] Support section-granular encrypted dispatch: the embedded MinGW images have
-  six sections and 62 cross-section references per PEB variant. Four helper
+- [x] Support section-granular encrypted dispatch: the embedded native images have
+  six sections and 39 cross-section references per PEB variant. Four helper
   sections and the hash resolver are protected; `.text` stays resident. Static
   thunk and function-table tests pass.
 - [x] Protect the hash-resolver section with synchronized entry and exit.
@@ -138,6 +138,12 @@ Churro without using WASM.
 - [x] Repeat the generated Sliver session check after all loader changes and
   require a matching `SessionOpenedEvent` plus `GetSessions` entry.
 
+The checks above passed for the prior loader build. The Zig rebuild has one
+remaining execution gate:
+
+- [ ] Run the Windows payload, CLR v2, custom-bundle, clipboard, protected-hash,
+  and Sliver session jobs at the commit containing the Zig-built loader assets.
+
 ## 4. Distribution
 
 - [x] Implement the 11-target Go CLI release matrix with `CGO_ENABLED=0` and
@@ -148,6 +154,12 @@ Churro without using WASM.
 - [ ] Publish and verify a tagged GitHub release from the final tested commit.
 
 ## Completion evidence
+
+The Windows execution evidence below belongs to the earlier MinGW-built loader
+at `2ca2b3dfbf2327261dd54e21164113f27dbf41bc`. The checked-in loader has
+since been rebuilt with Zig 0.17.0. Its local Go tests and byte-for-byte
+macOS/Linux rebuilds pass; Windows payload and Sliver execution at the Zig
+asset commit remain to be verified by the updated Actions workflow.
 
 The complete [Windows Actions run 37574504983](https://github.com/sliverarmory/churro/actions/runs/37574504983)
 passed 16 of 16 jobs at implementation commit

@@ -1,0 +1,47 @@
+diff --git a/server/generate/binaries.go b/server/generate/binaries.go
+index 7a0cd75..bbdc1f7 100644
+--- a/server/generate/binaries.go
++++ b/server/generate/binaries.go
+@@ -136,7 +136,7 @@ func isZigCC(cc string) bool {
+ 		return true
+ 	}
+ 	// Fallback: user-provided CC might not match our canonical format.
+-	return strings.Contains(cc, "zig cc")
++	return strings.Contains(cc, "zig cc") || strings.Contains(cc, "zig.exe\" cc")
+ }
+ 
+ func isZigCompilerCmd(cmd string) bool {
+@@ -153,7 +153,8 @@ func isZigCompilerCmd(cmd string) bool {
+ 		return true
+ 	}
+ 	// Fallback: user-provided compilers might not match our canonical format.
+-	return strings.Contains(cmd, "zig cc") || strings.Contains(cmd, "zig c++")
++	return strings.Contains(cmd, "zig cc") || strings.Contains(cmd, "zig c++") ||
++		strings.Contains(cmd, "zig.exe\" cc") || strings.Contains(cmd, "zig.exe\" c++")
+ }
+ 
+ func ensureZigPrefixMap(cmd string) string {
+@@ -590,12 +591,7 @@ func windowsShellcode(name string, build *clientpb.ImplantBuild, config *clientp
+ func SliverSharedLibrary(name string, build *clientpb.ImplantBuild, config *clientpb.ImplantConfig, pbC2Implant *clientpb.HTTPC2ImplantConfig) (string, error) {
+ 	appDir := assets.GetRootAppDir()
+ 
+-	var cc string
+-	var cxx string
+-	if runtime.GOOS != config.GOOS || runtime.GOARCH != config.GOARCH {
+-		buildLog.Debugf("Cross-compiling from %s/%s to %s/%s", runtime.GOOS, runtime.GOARCH, config.GOOS, config.GOARCH)
+-		cc, cxx = findCrossCompilers(config.GOOS, config.GOARCH)
+-	}
++	cc, cxx := findCrossCompilers(config.GOOS, config.GOARCH)
+ 
+ 	buildLog.Infof(" CC: %s", cc)
+ 	buildLog.Infof("CXX: %s", cxx)
+@@ -618,6 +614,9 @@ func SliverSharedLibrary(name string, build *clientpb.ImplantBuild, config *clie
+ 		GOGARBLE:    goGarble(config),
+ 	}
+ 	sanitizeZigForBuild(goConfig, "c-shared")
++	if !isZigCC(goConfig.CC) || !isZigCompilerCmd(goConfig.CXX) {
++		return "", fmt.Errorf("Churro E2E requires Zig CC/CXX, got %q / %q", goConfig.CC, goConfig.CXX)
++	}
+ 	buildLog.Infof(" CC: %s", goConfig.CC)
+ 	buildLog.Infof("CXX: %s", goConfig.CXX)
+ 

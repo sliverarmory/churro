@@ -69,9 +69,8 @@
 #define SX(c) ((char)((unsigned char)(c) ^ SHIM_STRING_XOR))
 
 /* IN_TEXT_Z pins module-level data into .text so exe2h captures it.
-   MSVC: routes via .veh$z (the old shim's naming, kept so the
-   linker merge directive below stays valid). gcc: direct section
-   attribute. */
+   MSVC routes via .veh$z (the old shim's naming, kept so the linker
+   merge directive below stays valid); Zig/Clang uses a section attribute. */
 #ifdef _MSC_VER
 #  pragma section(".veh$z", read, execute)
 #  pragma comment(linker, "/MERGE:.veh=.text")
@@ -84,8 +83,8 @@
    multi-section path picks it up. Fritter then reads DISPATCH_SHIM_FNS[1]
    from the shim's companion fn_table header to learn the dispatcher's
    offset within the shim blob, no marker scan needed.
-   MSVC: .disp$a is a fresh code section (read+execute). gcc: named
-   attribute section, source-order-preserved by -fno-toplevel-reorder. */
+   MSVC: .disp$a is a fresh code section (read+execute). Zig/Clang:
+   named attribute section. */
 #ifdef _MSC_VER
 /* code_seg alone allocates .disp$a as a CODE section (IMAGE_SCN_CNT_CODE);
    using #pragma section first would lock it in as data-with-execute, which
@@ -151,17 +150,16 @@ typedef struct {
 } FN_ENTRY;
 
 /* Combined marker + count + entries lives in a raw byte array with
-   the marker at offset 0. Defined at the file tail so under gcc's
-   -fno-toplevel-reorder it lands AFTER DispatchShimEntry in .text.
-   Fritter locates it by scanning for the marker bytes. */
+   the marker at offset 0. Fritter locates it by scanning for the marker
+   bytes; the Zig build checks that DispatchShimEntry starts .text. */
 #define FN_TABLE_AREA_SIZE  (16 + MAX_FN_COUNT * sizeof(FN_ENTRY))
 extern volatile uint8_t g_fn_table_area[];
 
 /* Forward declarations */
-static void  *shim_find_dll(char *dll_name);
-static void  *shim_get_export(void *base, char *api_name);
-static int    shim_stricmp(const char *a, const char *b);
-static int    shim_strcmp(const char *a, const char *b);
+static void  *shim_find_dll(const volatile char *dll_name);
+static void  *shim_get_export(void *base, const volatile char *api_name);
+static int    shim_stricmp(const char *a, const volatile char *b);
+static int    shim_strcmp(const char *a, const volatile char *b);
 static void   shim_xor_region(uint8_t *base, uint32_t size, uint8_t key);
 static void   shim_wipe_region(uint8_t *base, uint32_t size, uint8_t byte);
 
@@ -213,10 +211,18 @@ void DispatchShimEntry(void *inst, void *shim_base) {
 
     /* Stack-built API strings, XOR-scrambled via SX(). Only kernel32
        + VirtualProtect are needed - no ntdll / VEH APIs anymore. */
-    char s_k32[] = {SX('k'),SX('e'),SX('r'),SX('n'),SX('e'),SX('l'),
-                    SX('3'),SX('2'),SX('.'),SX('d'),SX('l'),SX('l'),0};
-    char s_vp[]  = {SX('V'),SX('i'),SX('r'),SX('t'),SX('u'),SX('a'),SX('l'),
-                    SX('P'),SX('r'),SX('o'),SX('t'),SX('e'),SX('c'),SX('t'),0};
+    volatile char s_k32[13];
+    volatile char s_vp[15];
+    s_k32[0] = SX('k');  s_k32[1] = SX('e');  s_k32[2] = SX('r');
+    s_k32[3] = SX('n');  s_k32[4] = SX('e');  s_k32[5] = SX('l');
+    s_k32[6] = SX('3');  s_k32[7] = SX('2');  s_k32[8] = SX('.');
+    s_k32[9] = SX('d');  s_k32[10] = SX('l'); s_k32[11] = SX('l');
+    s_k32[12] = 0;
+    s_vp[0] = SX('V');  s_vp[1] = SX('i');  s_vp[2] = SX('r');
+    s_vp[3] = SX('t');  s_vp[4] = SX('u');  s_vp[5] = SX('a');
+    s_vp[6] = SX('l');  s_vp[7] = SX('P');  s_vp[8] = SX('r');
+    s_vp[9] = SX('o');  s_vp[10] = SX('t'); s_vp[11] = SX('e');
+    s_vp[12] = SX('c'); s_vp[13] = SX('t'); s_vp[14] = 0;
 
     void *loader_base = (char*)shim_base + ldr_off;
 
@@ -351,7 +357,7 @@ static void shim_wipe_region(uint8_t *base, uint32_t size, uint8_t byte) {
 /* ================================================================
  * PEB walk + export resolver (unchanged from veh_shim.c)
  * ================================================================ */
-static void *shim_find_dll(char *dll_name) {
+static void *shim_find_dll(const volatile char *dll_name) {
     PPEB peb = GET_PEB();
     PPEB_LDR_DATA ldr = peb->Ldr;
 
@@ -388,7 +394,7 @@ static void *shim_find_dll(char *dll_name) {
     return 0;
 }
 
-static void *shim_get_export(void *base, char *api_name) {
+static void *shim_get_export(void *base, const volatile char *api_name) {
     PIMAGE_DOS_HEADER dos = (PIMAGE_DOS_HEADER)base;
     PIMAGE_NT_HEADERS nt  = RVA2VA(PIMAGE_NT_HEADERS, base, dos->e_lfanew);
     DWORD rva = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT].VirtualAddress;
@@ -410,7 +416,7 @@ static void *shim_get_export(void *base, char *api_name) {
 
 /* Convention: a = plaintext (PEB / export table), b = scrambled
    stack-built string. */
-static int shim_stricmp(const char *a, const char *b) {
+static int shim_stricmp(const char *a, const volatile char *b) {
     while (*a && *b) {
         char bc = (char)((unsigned char)*b ^ SHIM_STRING_XOR);
         if ((*a | 0x20) != (bc | 0x20)) return 1;
@@ -419,7 +425,7 @@ static int shim_stricmp(const char *a, const char *b) {
     return (*a != *b) ? 1 : 0;
 }
 
-static int shim_strcmp(const char *a, const char *b) {
+static int shim_strcmp(const char *a, const volatile char *b) {
     while (*a && *b) {
         char bc = (char)((unsigned char)*b ^ SHIM_STRING_XOR);
         if (*a != bc) return 1;
@@ -428,11 +434,10 @@ static int shim_strcmp(const char *a, const char *b) {
     return (*a != *b) ? 1 : 0;
 }
 
-/* memset stub, the shim links with -nodefaultlib. MSVC emits a call
+/* memset stub, the shim links without a C runtime. MSVC emits a call
    to memset for the zero-fill tail of the partially-initialized
    g_fn_table_area below; without this stub the link fails. Placed
-   at the tail (with g_fn_table_area) so under gcc's -fno-toplevel-
-   reorder it lands AFTER DispatchShimEntry, not at .text+0. */
+   at the tail (with g_fn_table_area), away from DispatchShimEntry. */
 #ifdef _MSC_VER
 #pragma function(memset)
 #endif
@@ -442,10 +447,8 @@ void *memset(void *dst, int c, size_t n) {
     return dst;
 }
 
-/* Fn table definition, placed at the tail of the source file so
-   under both compilers it lands AFTER DispatchShimEntry in .text.
-   MSVC: /Gy COMDAT + .veh$z merged into .text keeps entry at .text+0.
-   gcc: -fno-toplevel-reorder honors source order → entry first.
+/* Fn table definition, placed at the tail of the source file.
+   The Zig build checks that DispatchShimEntry starts .text.
 
    Only the 8-byte marker is initialized in source; fritter fills in
    count + entries at build time. The array is declared volatile so

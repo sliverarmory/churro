@@ -27,7 +27,7 @@ static void NTAPI tls_callback(PVOID module, DWORD reason, PVOID reserved) {
     }
 }
 
-/* MinGW's PE linker places this pointer into the image's TLS callback table. */
+/* The PE linker places this pointer into the image's TLS callback table. */
 PIMAGE_TLS_CALLBACK const churro_tls_callback
     __attribute__((section(".CRT$XLB"), used)) = tls_callback;
 

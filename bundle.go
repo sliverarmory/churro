@@ -2,6 +2,7 @@ package churro
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"math"
@@ -210,6 +211,17 @@ func validateLoaderMetadata(meta LoaderMetadata, image []byte) error {
 			return fmt.Errorf("reference %d repeats a source displacement", i)
 		}
 		seenDisp[disp] = struct{}{}
+		if !residentLoaderFunction(meta.Functions[ref.TargetFn]) {
+			if ref.InstLength != 5 || ref.DispOffset != 1 || image[ref.SrcBlobOff] != 0xe8 {
+				return fmt.Errorf("reference %d into a protected section is not CALL rel32", i)
+			}
+			target := int64(ref.SrcBlobOff) + int64(ref.InstLength) +
+				int64(int32(binary.LittleEndian.Uint32(image[disp:disp+4])))
+			callee := meta.Functions[ref.TargetFn]
+			if target < int64(callee.Offset) || target >= int64(callee.Offset)+int64(callee.Size) {
+				return fmt.Errorf("reference %d resolves outside target section %q", i, callee.Name)
+			}
+		}
 	}
 	return nil
 }

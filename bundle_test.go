@@ -2,6 +2,7 @@ package churro
 
 import (
 	"context"
+	"encoding/binary"
 	"strings"
 	"testing"
 )
@@ -10,6 +11,9 @@ import (
 // behavior is covered by the native-loader integration tests.
 func TestMultiSectionBundleMetadataValidation(t *testing.T) {
 	bundle := EmbeddedLoaderBundle()
+	bundle.PEB1 = append([]byte(nil), bundle.PEB1...)
+	bundle.PEB1[1000] = 0xe8
+	binary.LittleEndian.PutUint32(bundle.PEB1[1001:1005], 4096-(1000+5))
 	bundle.PEB1Meta = LoaderMetadata{
 		Functions: []LoaderFunction{
 			{Offset: 0, Size: 4096, SinglePage: true, Name: ".text"},
@@ -22,6 +26,11 @@ func TestMultiSectionBundleMetadataValidation(t *testing.T) {
 	if _, err := NewWithLoader(context.Background(), bundle); err != nil {
 		t.Fatalf("valid multi-section metadata rejected: %v", err)
 	}
+	bundle.PEB1[1000] = 0xe9
+	if _, err := NewWithLoader(context.Background(), bundle); err == nil || !strings.Contains(err.Error(), "not CALL rel32") {
+		t.Fatalf("non-call protected reference = %v", err)
+	}
+	bundle.PEB1[1000] = 0xe8
 	bundle.PEB1Meta.References[0].TargetFn = 2
 	if _, err := NewWithLoader(context.Background(), bundle); err == nil || !strings.Contains(err.Error(), "function index") {
 		t.Fatalf("out-of-range function reference = %v", err)
@@ -43,8 +52,8 @@ func TestEmbeddedLoaderBundleMetadata(t *testing.T) {
 	if got := len(bundle.PEB1Meta.Functions); got != 6 {
 		t.Fatalf("PEB1 function count = %d, want 6", got)
 	}
-	if got := len(bundle.PEB2Meta.References); got != 62 {
-		t.Fatalf("PEB2 reference count = %d, want 62", got)
+	if got := len(bundle.PEB2Meta.References); got != 39 {
+		t.Fatalf("PEB2 reference count = %d, want 39", got)
 	}
 	if err := bundle.validate(); err != nil {
 		t.Fatalf("embedded bundle validation: %v", err)

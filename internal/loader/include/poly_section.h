@@ -10,7 +10,7 @@
  * one section. Use this to co-locate tight caller-callee chains so
  * the call doesn't cross a page boundary.
  *
- * MSVC uses code_seg and MinGW uses a function section attribute. Both
+ * MSVC uses code_seg and Zig/Clang uses a function section attribute. Both
  * produce named code sections for exe2h's function and cross-section
  * reference tables. The generated blob is packed by exe2h, so runtime
  * dispatch operates on the packed section offsets, not PE RVAs. */

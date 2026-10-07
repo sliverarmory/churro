@@ -27,10 +27,18 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - name: Install x64 MinGW compiler
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
+      - name: Verify checked-in loader bundle is reproducible
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+          ./scripts/rebuild-loader-blobs.sh --output-dir "$RUNNER_TEMP/churro-pinned-bundle"
+          for file in \
+            loader_peb1_exe_x64.bin loader_peb2_exe_x64.bin dispatch_shim_exe_x64.bin \
+            loader_peb1_metadata.json loader_peb2_metadata.json bundle.json \
+            poly_seed.h api_shuffle.h api_master.h; do
+            cmp "internal/assets/$file" "$RUNNER_TEMP/churro-pinned-bundle/$file"
+          done
       - name: Build bundle with rotated Poly and API constants
         run: |
           ./scripts/rebuild-loader-blobs.sh --rotate --seed 0x12345678 --output-dir "$RUNNER_TEMP/churro-rotated-bundle"
@@ -66,6 +74,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
       - uses: actions/download-artifact@v4
         with:
           name: churro-rotated-loader-bundle
@@ -151,6 +162,9 @@ jobs:
           go-version-file: sliver/go.mod
           cache: true
           cache-dependency-path: sliver/go.sum
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.0
       - name: Generate Sliver DLL, run Churro loader, and require session-open event
         shell: pwsh
         run: ./scripts/test-windows-sliver.ps1
