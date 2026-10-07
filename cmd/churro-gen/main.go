@@ -87,7 +87,7 @@ func runWithClipboard(args []string, stdout, stderr io.Writer, copyClipboard fun
 	flags.StringVar(server, "s", "", "alias for -server")
 	flags.StringVar(moduleName, "n", "", "alias for -modname")
 	flags.StringVar(chunked, "g", "1", "alias for -chunked")
-	if err := flags.Parse(args); err != nil {
+	if err := flags.Parse(nativeCompatibleFlagArgs(flags, args)); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
@@ -97,7 +97,7 @@ func runWithClipboard(args []string, stdout, stderr io.Writer, copyClipboard fun
 		fmt.Fprintf(stdout, "churro-gen %s\n", version)
 		return 0
 	}
-	if *input == "" || flags.NArg() != 0 {
+	if *input == "" {
 		fmt.Fprintln(stderr, "usage: churro-gen -input payload.dll [-method StartW] [-output loader.bin]")
 		return 2
 	}
@@ -248,6 +248,64 @@ func runWithClipboard(args []string, stdout, stderr io.Writer, copyClipboard fun
 	printGenerationSummary(stdout, *input, outputPath, stagedPath, stagedURL, payload, staging,
 		format, entropy, compression, exit, headers, continuation)
 	return 0
+}
+
+// nativeCompatibleFlagArgs accepts Fritter's attached colon values and scans
+// past stray positional arguments. Only registered string flags are rewritten;
+// the value after the first colon remains untouched, including URL schemes and
+// Windows drive letters. Unknown options remain for FlagSet.Parse to reject.
+func nativeCompatibleFlagArgs(flags *flag.FlagSet, args []string) []string {
+	parsed := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-?" {
+			parsed = append(parsed, "-h")
+			continue
+		}
+		if arg == "-" || arg == "--" || !strings.HasPrefix(arg, "-") {
+			continue
+		}
+		prefix := "-"
+		option := arg[1:]
+		if strings.HasPrefix(arg, "--") {
+			prefix = "--"
+			option = arg[2:]
+		}
+		name := option
+		attached := false
+		colon := strings.IndexByte(option, ':')
+		equals := strings.IndexByte(option, '=')
+		switch {
+		case equals >= 0 && (colon < 0 || equals < colon):
+			name = option[:equals]
+			attached = true
+		case colon >= 0:
+			candidate := option[:colon]
+			if registeredStringFlag(flags.Lookup(candidate)) {
+				name = candidate
+				arg = prefix + name + "=" + option[colon+1:]
+				attached = true
+			}
+		}
+		parsed = append(parsed, arg)
+		if !attached && registeredStringFlag(flags.Lookup(name)) && i+1 < len(args) {
+			i++
+			parsed = append(parsed, args[i])
+		}
+	}
+	return parsed
+}
+
+func registeredStringFlag(option *flag.Flag) bool {
+	if option == nil {
+		return false
+	}
+	getter, ok := option.Value.(flag.Getter)
+	if !ok {
+		return false
+	}
+	_, ok = getter.Get().(string)
+	return ok
 }
 
 func printGenerationSummary(out io.Writer, input, output, stagedPath, stagedURL string,
@@ -514,50 +572,43 @@ func parseHeaders(value string) (churro.PEHeaders, error) {
 
 func payloadForPath(path string, data []byte, options payloadOptions) (churro.Payload, error) {
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".exe":
+	case ".exe", ".dll":
 		managed, dll, err := inspectPE(data)
 		if err != nil {
 			return nil, err
 		}
-		if dll {
-			return nil, errors.New("input has an .exe name but PE contents identify a DLL")
-		}
-		if options.class != "" || options.method != "" {
-			return nil, errors.New("DLL invocation flags are only valid with a DLL input")
-		}
-		if options.unicode {
-			return nil, errors.New("-unicode is only valid with a native DLL export")
-		}
-		if managed {
-			if options.thread || options.decoy != "" || options.headers != churro.PEHeadersOverwrite {
-				return nil, errors.New("native PE flags are not valid with a managed executable")
-			}
-			return churro.DotNetExecutable{
-				Assembly:  data,
-				Arguments: options.arguments,
-				Runtime:   churro.DotNetRuntime{Version: options.runtimeVersion, AppDomain: options.appDomain},
-			}, nil
-		}
-		if options.runtimeVersion != "" || options.appDomain != "" {
-			return nil, errors.New("-runtime and -domain require a managed input")
-		}
-		flags := churro.NativeExecutableFlags(0)
-		if options.thread {
-			flags |= churro.NativeExecutableRunInThread
-		}
-		return churro.NativeExecutable{
-			Image:     data,
-			Arguments: options.arguments,
-			Flags:     flags,
-			PE:        churro.NativePEConfig{Headers: options.headers, DecoyModulePath: options.decoy},
-		}, nil
-	case ".dll":
-		managed, dll, err := inspectPE(data)
-		if err != nil {
-			return nil, err
-		}
+		// Native Fritter first checks the filename extension, then trusts the PE
+		// characteristics for EXE-versus-DLL selection. The Go CLI does the same.
 		if !dll {
-			return nil, errors.New("input has a .dll name but PE contents identify an executable")
+			if options.class != "" || options.method != "" {
+				return nil, errors.New("DLL invocation flags are only valid with a DLL input")
+			}
+			if options.unicode {
+				return nil, errors.New("-unicode is only valid with a native DLL export")
+			}
+			if managed {
+				if options.thread || options.decoy != "" || options.headers != churro.PEHeadersOverwrite {
+					return nil, errors.New("native PE flags are not valid with a managed executable")
+				}
+				return churro.DotNetExecutable{
+					Assembly:  data,
+					Arguments: options.arguments,
+					Runtime:   churro.DotNetRuntime{Version: options.runtimeVersion, AppDomain: options.appDomain},
+				}, nil
+			}
+			if options.runtimeVersion != "" || options.appDomain != "" {
+				return nil, errors.New("-runtime and -domain require a managed input")
+			}
+			flags := churro.NativeExecutableFlags(0)
+			if options.thread {
+				flags |= churro.NativeExecutableRunInThread
+			}
+			return churro.NativeExecutable{
+				Image:     data,
+				Arguments: options.arguments,
+				Flags:     flags,
+				PE:        churro.NativePEConfig{Headers: options.headers, DecoyModulePath: options.decoy},
+			}, nil
 		}
 		if options.thread {
 			return nil, errors.New("-thread is only valid with a native executable")

@@ -301,6 +301,38 @@ try {
             ".argv" = "native executable arguments"
         }
     }
+    $RenamedNativeDll = Join-Path $BuildPath "native-dll-named-exe.exe"
+    $RenamedNativeExe = Join-Path $BuildPath "native-exe-named-dll.dll"
+    Copy-Item -LiteralPath $ImportsDll -Destination $RenamedNativeDll -Force
+    Copy-Item -LiteralPath $NativeExe -Destination $RenamedNativeExe -Force
+    Invoke-TestCase "native-dll-named-exe" {
+        Invoke-CLILoaderCase -Label "native-dll-named-exe" -InputPath $RenamedNativeDll -Options @("-method", "RunImports") -Markers @{
+            ".imports" = "relocations and imports"
+        }
+    }
+    Invoke-TestCase "native-exe-named-dll" {
+        Invoke-CLILoaderCase -Label "native-exe-named-dll" -InputPath $RenamedNativeExe -Options @("-thread", "-args", "churro-exe-argument") -Markers @{
+            ".entry" = "native executable entry"
+            ".argv" = "native executable arguments"
+        }
+    }
+    Invoke-TestCase "legacy-colon-cli" {
+        $Label = "legacy-colon-cli"
+        $Loader = Join-Path $BuildPath "$Label.bin"
+        $env:CHURRO_E2E_PREFIX = Join-Path $BuildPath $Label
+        $Markers = @{ ".imports" = "relocations and imports" }
+        Clear-Markers $env:CHURRO_E2E_PREFIX $Markers
+        Invoke-Checked "generate $Label" {
+            & $CliExe "stray-positional" ("-i:" + $ImportsDll) "-m:RunImports" ("-o:" + $Loader) "-entropy:none"
+        }
+        $RunnerOutput = @(& $RunnerExe -input $Loader -timeout 45s 2>&1)
+        $RunnerExitCode = $LASTEXITCODE
+        $RunnerOutput | ForEach-Object { Write-Host $_ }
+        if ($RunnerOutput -notcontains "shellcode thread returned") {
+            throw "$Label runner did not report shellcode completion"
+        }
+        Assert-Markers $Label $env:CHURRO_E2E_PREFIX $Markers $RunnerExitCode
+    }
     Invoke-TestCase "native-args-ansi" {
         Invoke-CLILoaderCase -Label "native-args-ansi" -InputPath $ImportsDll -Options @("-method", "RunArgsA", "-args", "churro-ansi-argument") -Markers @{
             ".args-ansi" = "ANSI argument received"
@@ -343,6 +375,20 @@ public static extern uint GetACP();
     Invoke-TestCase "managed-library-args" {
         Invoke-CLILoaderCase -Label "managed-library-args" -InputPath $ManagedDll -Options @("-class", "ChurroE2E", "-method", "RunArgs", "-args", '"quoted value" tail') -Markers @{
             ".managed-dll-args" = "managed static method quoted arguments"
+        }
+    }
+    $RenamedManagedDll = Join-Path $BuildPath "managed-dll-named-exe.exe"
+    $RenamedManagedExe = Join-Path $BuildPath "managed-exe-named-dll.dll"
+    Copy-Item -LiteralPath $ManagedDll -Destination $RenamedManagedDll -Force
+    Copy-Item -LiteralPath $ManagedExe -Destination $RenamedManagedExe -Force
+    Invoke-TestCase "managed-dll-named-exe" {
+        Invoke-CLILoaderCase -Label "managed-dll-named-exe" -InputPath $RenamedManagedDll -Options @("-class", "ChurroE2E", "-method", "Run") -Markers @{
+            ".managed-dll" = "managed static method"
+        }
+    }
+    Invoke-TestCase "managed-exe-named-dll" {
+        Invoke-CLILoaderCase -Label "managed-exe-named-dll" -InputPath $RenamedManagedExe -Options @() -Markers @{
+            ".managed-exe" = "managed executable entry"
         }
     }
     Invoke-TestCase "vbscript" {

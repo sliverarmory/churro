@@ -11,6 +11,8 @@ argument in the target process ANSI code page; `-unicode` passes it as UTF-16.
 The CLI accepts Unicode command-line text before encoding the export argument.
 `-args` is limited to 250 bytes and is unavailable for scripts. `-fork` takes a
 hexadecimal host entry-point RVA for host continuation.
+For a file named `.exe` or `.dll`, its PE headers select executable versus DLL
+behavior, so a renamed image is handled according to its contents.
 
 Output formats are `bin`, `base64`, `c`, `ruby`, `python`, `powershell`,
 `csharp`, `hex`, and `uuid`, with Fritter-compatible numeric values 1 through
@@ -45,6 +47,9 @@ aliases include `rb`, `py`, `ps`, and `cs`; exit accepts `1` to `3`, entropy
 accepts `1` to `3` and `none`/`low`/`full`, and headers accepts `1` or `2`.
 The CLI's default entropy is `default` (names and crypto).
 Legacy long aliases `-file`, `-function`, `-params`, and `-oep` are accepted.
+`-?` opens help. String flags also accept attached colon values, such as
+`-o:loader.bin` or `--server:https://example.test/`. Flags are recognized
+after stray positional words; the input still requires `-input` or `-i`.
 The deprecated `-chunked` (`-g`) flag accepts `0` or `1` for command-line
 compatibility; the dispatch shim is always used.
 

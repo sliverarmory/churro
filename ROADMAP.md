@@ -26,10 +26,10 @@ Baseline proof: [Windows Actions run 37554694955](https://github.com/sliverarmor
 at `0cff53bd0733d353c642ba8cff346894a74a8552`.
 
 Implementation checkpoint: [PR #1](https://github.com/sliverarmory/churro/pull/1)
-on `feat/fritter-parity` at `2e25176a5eda95de514fd95511fbc7edcae57c34`.
-Local `go test ./...`, `go test -race ./...`, `go vet ./...`, all 11
-cross-builds, and a byte-for-byte pinned loader rebuild passed. Windows
-execution evidence is recorded below.
+on `feat/fritter-parity` at `cc555c781340499a904a885a6725f0fcefe06a7b`.
+Local `go test ./...`, `go test -race ./...`, `go vet ./...`, Windows test
+cross-compilation and vet, all 11 CLI cross-builds, and a byte-for-byte pinned
+loader rebuild passed. Windows execution evidence is recorded below.
 
 ## 1. Public API and CLI parity
 
@@ -64,10 +64,18 @@ execution evidence is recorded below.
   canceled generation; deterministic unit and race tests passed.
 - [x] Include payload type, native or managed invocation, and the complete
   credential-free staged URL in the CLI success report; focused Go tests pass.
+- [x] Accept Fritter native CLI help and attached-value spellings, including
+  `-?` and `-o:path`, and continue parsing options after stray positionals.
+- [x] Select EXE versus DLL behavior from PE headers for files with `.exe` or
+  `.dll` names, including renamed native and managed images.
 
 Churro wraps invalid generation inputs in `GenerationError` so callers can use
 stable codes. The underlying `ValidationError` remains available through
 `errors.As`; Fritter returns it directly at the top level.
+Churro's CLI defaults to `EntropyDefault` and aPLib, following Fritter's
+native C CLI. Fritter's older Go/WASM CLI defaults to `EntropyNone` and no
+compression; `-entropy none -compression none` selects those settings in
+Churro without using WASM.
 
 ## 2. Shellcode generation parity
 
@@ -111,11 +119,13 @@ stable codes. The underlying `ValidationError` remains available through
   Windows after the native dispatch change.
 - [x] Execute `ExitProcess` and `ExitBlock` as bounded CLI cases with markers.
 - [x] Execute native DLL loaders with `EntropyNone` and `EntropyNames`.
+- [ ] Execute the legacy colon-option CLI and renamed native/managed EXE/DLL
+  fixtures through the public CLI on Windows.
 - [x] Execute a native DLL ANSI export argument containing non-ASCII text under
   Windows ANSI code page 1252 after the native loader rebuild.
 - [x] Re-run the full Windows payload, CLR v2, custom-bundle, and clipboard
   checks at the commit containing the rebuilt native loader images.
-- [ ] Execute the deterministic two-thread protected hash-resolver test on
+- [x] Execute the deterministic two-thread protected hash-resolver test on
   Windows. Require observed active-call states 1, 2, 1, and 0, both native
   thread results, and restored ciphertext. Re-run four randomized host-image
   continuation loaders as full-loader stress at the same commit.
@@ -135,26 +145,31 @@ stable codes. The underlying `ValidationError` remains available through
 
 ## Completion evidence
 
-The complete [Windows Actions run 37570256457](https://github.com/sliverarmory/churro/actions/runs/37570256457)
+The complete [Windows Actions run 37572274717](https://github.com/sliverarmory/churro/actions/runs/37572274717)
 passed 16 of 16 jobs at implementation commit
-`2e25176a5eda95de514fd95511fbc7edcae57c34`. Its
-[Windows payload job](https://github.com/sliverarmory/churro/actions/runs/37570256457/job/112627274461)
-passed 28 cases, including a non-ASCII native DLL argument on Windows ANSI
-code page 1252, custom imports, CLR v4 arguments, entropy and exit modes.
-The separate `TestWindowsClipboardCFTextReadback` test passed in that job.
-The [CLR v2 job](https://github.com/sliverarmory/churro/actions/runs/37570256457/job/112627045016)
+`cc555c781340499a904a885a6725f0fcefe06a7b`. Its
+[Windows payload job](https://github.com/sliverarmory/churro/actions/runs/37572274717/job/112633584216)
+passed 28 cases, including four fresh host-continuation loaders, non-ASCII
+native DLL arguments on Windows ANSI code page 1252, custom imports,
+CLR v4 arguments, entropy and exit modes. The dedicated
+`TestWindowsProtectedHashConcurrent` check observed two callers in the
+decrypted hash section, verified return values `0x11` and `0x22`, and
+confirmed the original ciphertext was restored for two independent seeds.
+The separate `TestWindowsClipboardCFTextReadback` check passed. The
+[CLR v2 job](https://github.com/sliverarmory/churro/actions/runs/37572274717/job/112633329035)
 passed managed EXE and DLL cases with and without quoted arguments. The
-[native bundle build job](https://github.com/sliverarmory/churro/actions/runs/37570256457/job/112627045186)
+[native bundle build job](https://github.com/sliverarmory/churro/actions/runs/37572274717/job/112633329172)
 compiled a 62-import image and generated a CLI loader from it.
 
-The [Sliver session job](https://github.com/sliverarmory/churro/actions/runs/37570256457/job/112627045302)
+The [Sliver session job](https://github.com/sliverarmory/churro/actions/runs/37572274717/job/112633328911)
 observed `SessionOpenedEvent` ID
-`84b07f33-7814-4332-8f0e-9cd1708f5812` on mTLS and confirmed the same
-session in `GetSessions`. All 11 CLI archives from the run were independently
-checked for SHA-256 and commit sidecars, embedded `SOURCE_COMMIT`, nonempty
-binaries, and five byte-matching packaged documents. The sorted
-checksum-manifest SHA-256 is
-`c9080d0b56160362acf798af7a1074bb223b617f0799c785be0008c356d7c570`.
+`91ab3bcb-b2a3-4094-bfef-d661397f73d1` on mTLS and confirmed the same
+session ID, name, and PID in `GetSessions`. All 11 CLI archives from the run
+were independently checked for SHA-256 and commit sidecars, embedded
+`SOURCE_COMMIT`, nonempty binaries, and five packaged documents matching that
+tested commit.
+The sorted checksum-manifest SHA-256 is
+`a42ccdb7c64f9a957b53245b2f22d3b954e25115292eb35b293f3be7e3631250`.
 
 Tagged-release publication remains pending; no release tag or release assets
 have been published.

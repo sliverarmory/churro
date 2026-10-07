@@ -103,17 +103,66 @@ func TestCLIArgumentErrors(t *testing.T) {
 	if code := run([]string{"-i", "missing.exe", "-g", "2"}, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "deprecated") {
 		t.Fatalf("invalid legacy chunked option: exit=%d stderr=%q", code, stderr.String())
 	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"payload.vbs"}, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "usage:") {
+		t.Fatalf("positional input accepted without -input: exit=%d stderr=%q", code, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"stray", "-unknown:value"}, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "flag provided but not defined") {
+		t.Fatalf("unknown option after positional was ignored: exit=%d stderr=%q", code, stderr.String())
+	}
 }
 
 func TestCLIHelpExitsSuccessfully(t *testing.T) {
-	for _, arg := range []string{"-h", "--help"} {
+	for _, arg := range []string{"-h", "--help", "-?"} {
 		t.Run(arg, func(t *testing.T) {
 			var stdout, stderr bytes.Buffer
-			if code := run([]string{arg}, &stdout, &stderr); code != 0 {
+			if code := run([]string{"stray", arg}, &stdout, &stderr); code != 0 {
 				t.Fatalf("help exit = %d, stderr=%q", code, stderr.String())
 			}
 			if !strings.Contains(stderr.String(), "-input") || !strings.Contains(stderr.String(), "-compression") {
 				t.Fatalf("help output omits CLI options: %q", stderr.String())
+			}
+		})
+	}
+}
+
+func TestCLIColonAttachedFlagsAndStrayPositionals(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "payload.vbs")
+	if err := os.WriteFile(input, []byte(`WScript.Echo "hello"`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name       string
+		outputFlag string
+	}{
+		{name: "short", outputFlag: "-o:"},
+		{name: "long", outputFlag: "--output:"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			loader := filepath.Join(dir, test.name+".bin")
+			module := filepath.Join(dir, test.name+".module")
+			var stdout, stderr bytes.Buffer
+			code := run([]string{
+				"stray", "--input:" + input,
+				"another-stray", test.outputFlag + loader,
+				"-server:https://example.test:8443/modules/",
+				"-modname:PAYLOAD", "-module-output:" + module,
+				"-entropy:none", "-compression:none",
+			}, &stdout, &stderr)
+			if code != 0 || stderr.Len() != 0 {
+				t.Fatalf("exit=%d stderr=%q", code, stderr.String())
+			}
+			for _, path := range []string{loader, module} {
+				if data, err := os.ReadFile(path); err != nil || len(data) == 0 {
+					t.Fatalf("output %q: bytes=%d err=%v", path, len(data), err)
+				}
+			}
+			if !strings.Contains(stdout.String(), "https://example.test:8443/modules/PAYLOAD") {
+				t.Fatalf("URL was altered: %q", stdout.String())
 			}
 		})
 	}
@@ -473,6 +522,42 @@ func TestManagedArgumentFlagsMapToTypedPayload(t *testing.T) {
 		class: "Example.Entry", method: "Run", arguments: args, unicode: true,
 	}); err == nil {
 		t.Fatal("managed DLL accepted native Unicode export flag")
+	}
+}
+
+func TestPEPayloadTypeUsesHeaderWithRenamedFile(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		path    string
+		image   []byte
+		options payloadOptions
+		want    string
+	}{
+		{name: "native DLL named exe", path: "payload.exe", image: cliSyntheticPE(true), options: payloadOptions{method: "Run"}, want: "native DLL"},
+		{name: "native EXE named dll", path: "payload.dll", image: cliSyntheticPE(false), options: payloadOptions{thread: true}, want: "native EXE"},
+		{name: "managed DLL named exe", path: "payload.exe", image: cliSyntheticManagedPE(true), options: payloadOptions{class: "Example.Entry", method: "Run"}, want: "managed DLL"},
+		{name: "managed EXE named dll", path: "payload.dll", image: cliSyntheticManagedPE(false), want: "managed EXE"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload, err := payloadForPath(test.path, test.image, test.options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := "unknown"
+			switch payload.(type) {
+			case churro.NativeDLL:
+				got = "native DLL"
+			case churro.NativeExecutable:
+				got = "native EXE"
+			case churro.DotNetDLL:
+				got = "managed DLL"
+			case churro.DotNetExecutable:
+				got = "managed EXE"
+			}
+			if got != test.want {
+				t.Fatalf("payload type = %s, want %s", got, test.want)
+			}
+		})
 	}
 }
 
