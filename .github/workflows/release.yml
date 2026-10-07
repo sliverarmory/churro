@@ -5,6 +5,7 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -22,7 +23,7 @@ jobs:
       - name: Check out tested ref
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
           persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -62,7 +63,7 @@ jobs:
       - name: Check out tested ref
         uses: actions/checkout@v7
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
           persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -76,7 +77,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           GOARM: ${{ matrix.goarm }}
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && format('ci-{0}', github.run_id) || github.ref_name }}
+          RELEASE_TAG: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && github.ref_name || format('ci-{0}', github.run_id) }}
           TARGET: ${{ matrix.target }}
         run: |
           set -euo pipefail
@@ -117,7 +118,7 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: build
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

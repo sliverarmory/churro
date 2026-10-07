@@ -11,6 +11,10 @@ permissions:
   contents: read
 
 jobs:
+  cli-release-matrix:
+    name: Build 11 Go CLI archives
+    uses: ./.github/workflows/release.yml
+
   rotated-bundle:
     name: Build rotated native loader bundle
     runs-on: ubuntu-24.04
