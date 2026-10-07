@@ -138,10 +138,9 @@ Churro without using WASM.
 - [x] Repeat the generated Sliver session check after all loader changes and
   require a matching `SessionOpenedEvent` plus `GetSessions` entry.
 
-The checks above passed for the prior loader build. The Zig rebuild has one
-remaining execution gate:
+The checks above also passed for the Zig-built loader assets:
 
-- [ ] Run the Windows payload, CLR v2, custom-bundle, clipboard, protected-hash,
+- [x] Run the Windows payload, CLR v2, custom-bundle, clipboard, protected-hash,
   and Sliver session jobs at the commit containing the Zig-built loader assets.
 
 ## 4. Distribution
@@ -155,11 +154,24 @@ remaining execution gate:
 
 ## Completion evidence
 
-The Windows execution evidence below belongs to the earlier MinGW-built loader
-at `2ca2b3dfbf2327261dd54e21164113f27dbf41bc`. The checked-in loader has
-since been rebuilt with Zig 0.17.0. Its local Go tests and byte-for-byte
-macOS/Linux rebuilds pass; Windows payload and Sliver execution at the Zig
-asset commit remain to be verified by the updated Actions workflow.
+The [Zig loader Windows Actions run 37650759721](https://github.com/sliverarmory/churro/actions/runs/37650759721)
+passed all 16 jobs at asset commit
+`e05a746b3ed6f34c9db85263954c2fd44e3f805d`. Its
+[bundle build job](https://github.com/sliverarmory/churro/actions/runs/37650759721/job/112893187068)
+reproduced all nine checked-in assets byte for byte, built a rotated bundle,
+and built a 62-import custom bundle. The
+[Windows payload job](https://github.com/sliverarmory/churro/actions/runs/37650759721/job/112893748420)
+passed Go tests, protected-hash concurrency, clipboard readback, and payload
+execution with rotated and custom bundles. The
+[CLR v2 job](https://github.com/sliverarmory/churro/actions/runs/37650759721/job/112893187144)
+passed. The [Sliver session job](https://github.com/sliverarmory/churro/actions/runs/37650759721/job/112893186553)
+generated a DLL using Zig and printed `PASS session-open event` for mTLS
+session `e13f86c2-b336-4361-be44-7c312c1c52c4`; the driver prints PASS
+only after confirming the matching session in `GetSessions`. All 11 CLI
+archive builds also passed at this commit.
+
+The following historical evidence belongs to the earlier MinGW-built loader
+at `2ca2b3dfbf2327261dd54e21164113f27dbf41bc`.
 
 The complete [Windows Actions run 37574504983](https://github.com/sliverarmory/churro/actions/runs/37574504983)
 passed 16 of 16 jobs at implementation commit
