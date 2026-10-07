@@ -78,15 +78,28 @@ function tables and uses hash placeholders, so it is not a usable manifest:
 }
 ```
 
-The real API list must contain exactly the 61 module/export pairs in the
-embedded bundle, in the order compiled into the native image. Custom bundles
-may reorder those pairs but cannot add or remove imports. `LoadLibraryA`
-occupies the first slot. The Poly constants must likewise come from the same
-native build. The SHA-256 fields bind the manifest to the three image files;
-they cannot prove that an opaque native image was compiled with the claimed
-constants. Generate the manifest alongside the images with `make loader-assets`
-in a matching Churro source tree, and keep those four files together. The
-generated `internal/assets/bundle.json` is a complete example.
+The real API list must contain the 61 module/export pairs required by the
+copied native runtime, plus up to three additional unique imports. The pairs
+may be reordered in the native build, but `kernel32.dll!LoadLibraryA` must
+remain in slot 0. Every module name is a lowercase ASCII `.dll` basename;
+export names are printable ASCII. The Go generator appends additional DLLs to
+the native preload list, which must fit its 256-byte field. The Poly constants
+and API order must come from the same native build. The SHA-256 fields bind
+the manifest to the three image files; they cannot prove that an opaque native
+image was compiled with the claimed constants. Generate the manifest alongside
+the images with `scripts/rebuild-loader-blobs.sh`, and keep those four files
+together. The generated `internal/assets/bundle.json` is a complete example.
+
+To extend the native import table, copy `internal/loader`, add an `XAPI` line
+to its `include/api_master.h` and any required function-pointer typedef to
+`loader/winapi.h`, then build with `--source-dir`, `--rotate`, and a separate
+`--output-dir`. The test helper below creates a 62-import bundle that resolves
+`advapi32.dll!GetUserNameA`:
+
+```sh
+./scripts/build-custom-api-test-bundle.sh /tmp/churro-extra-api
+churro-gen -input payload.dll -method Start -loader-bundle /tmp/churro-extra-api
+```
 
 Multi-section images list every extracted function and cross-section
 reference in their respective metadata tables. Each reference has

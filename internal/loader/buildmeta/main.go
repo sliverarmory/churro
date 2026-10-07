@@ -15,6 +15,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/sliverarmory/churro/internal/wire"
 )
 
 type poly struct {
@@ -45,6 +47,7 @@ type bundleManifest struct {
 
 var definePattern = regexp.MustCompile(`(?m)^#define\s+([A-Z0-9_]+)\s+([0-9A-Fa-fxXuU]+)\s*$`)
 var apiPattern = regexp.MustCompile(`^XAPI\(\s*([A-Z0-9_]+),\s*"([^"]+)"`)
+var modulePattern = regexp.MustCompile(`(?m)^#define[ \t]+([A-Z0-9_]+_DLL)[ \t]+"([^"]+)"`)
 
 func main() {
 	if len(os.Args) < 2 {
@@ -174,6 +177,9 @@ func rotate(includeDir string, seed uint32) error {
 	if len(lines) == 0 || !strings.Contains(lines[0], `"LoadLibraryA"`) {
 		return fmt.Errorf("api_master.h lacks pinned LoadLibraryA slot")
 	}
+	if len(lines) > 64 {
+		return fmt.Errorf("api_master.h has %d APIs, exceeding the native 64-slot table", len(lines))
+	}
 	state = seed ^ 0xdeadbeef
 	_ = next(&state)
 	for i := len(lines) - 1; i >= 2; i-- {
@@ -229,14 +235,17 @@ func parsePoly(data []byte) (poly, error) {
 	return p, nil
 }
 
-func parseAPIImports(data []byte) ([]apiImport, error) {
-	modules := map[string]string{
-		"KERNEL32_DLL": "kernel32.dll", "NTDLL_DLL": "ntdll.dll",
-		"WININET_DLL": "wininet.dll", "OLE32_DLL": "ole32.dll",
-		"OLEAUT32_DLL": "oleaut32.dll", "MSCOREE_DLL": "mscoree.dll",
-		"SHELL32_DLL": "shell32.dll",
+func parseAPIImports(data, definitions []byte) ([]apiImport, error) {
+	modules := make(map[string]string)
+	for _, match := range modulePattern.FindAllSubmatch(definitions, -1) {
+		macro, name := string(match[1]), string(match[2])
+		if !strings.HasSuffix(name, ".dll") || len(name) < 5 || len(name) > 63 {
+			return nil, fmt.Errorf("invalid DLL name %q for %s", name, macro)
+		}
+		modules[macro] = name
 	}
 	var result []apiImport
+	seen := make(map[apiImport]struct{})
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -251,13 +260,28 @@ func parseAPIImports(data []byte) ([]apiImport, error) {
 		if !ok {
 			return nil, fmt.Errorf("unknown API module %s", parts[1])
 		}
-		result = append(result, apiImport{Module: module, Name: parts[2]})
+		imp := apiImport{Module: module, Name: parts[2]}
+		if _, duplicate := seen[imp]; duplicate {
+			return nil, fmt.Errorf("duplicate API import %s!%s", imp.Module, imp.Name)
+		}
+		seen[imp] = struct{}{}
+		result = append(result, imp)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
 	}
-	if len(result) == 0 || result[0].Name != "LoadLibraryA" {
+	if len(result) == 0 || result[0] != (apiImport{Module: "kernel32.dll", Name: "LoadLibraryA"}) {
 		return nil, fmt.Errorf("API shuffle lacks pinned LoadLibraryA slot")
+	}
+	if len(result) > 64 {
+		return nil, fmt.Errorf("API shuffle has %d APIs, exceeding the native 64-slot table", len(result))
+	}
+	wireImports := make([]wire.APIImport, len(result))
+	for i, imp := range result {
+		wireImports[i] = wire.APIImport{Module: imp.Module, Name: imp.Name}
+	}
+	if _, err := wire.DLLNamesForAPIImports(wireImports); err != nil {
+		return nil, fmt.Errorf("API shuffle: %w", err)
 	}
 	return result, nil
 }
@@ -271,11 +295,15 @@ func emitManifest(includeDir, assetsDir, goOutput string) error {
 	if err != nil {
 		return err
 	}
+	moduleData, err := os.ReadFile(filepath.Join(includeDir, "fritter.h"))
+	if err != nil {
+		return err
+	}
 	p, err := parsePoly(polyData)
 	if err != nil {
 		return err
 	}
-	imports, err := parseAPIImports(apiData)
+	imports, err := parseAPIImports(apiData, moduleData)
 	if err != nil {
 		return err
 	}

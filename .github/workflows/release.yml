@@ -30,6 +30,10 @@ jobs:
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ github.ref_name }}
     steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
       - name: Download release artifacts
         uses: actions/download-artifact@v8
         with:
@@ -52,6 +56,11 @@ jobs:
           [[ $(jq -r '.object.type' <<<"${tag_data}") == commit ]]
           target_sha=$(jq -r '.object.sha' <<<"${tag_data}")
           [[ ${target_sha} =~ ^[0-9a-f]{40}$ ]]
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "${target_sha}" origin/main; then
+            echo "Release tag target is not reachable from main: ${target_sha}" >&2
+            exit 1
+          fi
           [[ $(find release -maxdepth 1 -type f \( -name '*.tar.gz' -o -name '*.zip' \) | wc -l) -eq 11 ]]
           [[ $(find release -maxdepth 1 -type f -name '*.sha256' | wc -l) -eq 11 ]]
           [[ $(find release -maxdepth 1 -type f -name '*.commit' | wc -l) -eq 11 ]]

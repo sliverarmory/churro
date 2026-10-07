@@ -29,8 +29,8 @@ dispatcher and thunk tail.
 
 Host continuation resolves `RtlCaptureContext` through the existing PEB/hash
 resolver to capture the running thread before `NtContinue`. This keeps the
-61-import wire layout unchanged; `GetThreadContext` cannot provide a valid
-context for the current running thread.
+fixed 64-slot API wire layout unchanged; `GetThreadContext` cannot provide a
+valid context for the current running thread.
 
 `scripts/rebuild-loader-blobs.sh` builds both PEB variants and the dispatch
 shim with x64 MinGW, then emits `*.bin`, `*_metadata.json`, and `bundle.json`
@@ -58,6 +58,16 @@ without `--seed` chooses a fresh seed; the generated `poly_seed.h` and
 `api_shuffle.h` are included in the output directory. Repeating a seed with
 the same compiler and source tree reproduces the Poly/API choices. The two
 PEB images remain separate to preserve the loader's PEB walk variation.
+
+To build from an edited copy of this source, pass `--source-dir COPY` with
+`--rotate` and a separate `--output-dir`; this protects the embedded assets.
+Additions to `include/api_master.h` must retain the 61 imports referenced by
+the copied runtime and fit its 64-slot API table. Add a matching typedef in
+`loader/winapi.h` when introducing a new typed API field. `buildmeta` reads DLL
+macros from `include/fritter.h`, so a new module macro can be added there.
+The generated manifest records the resulting API order, and the Go generator
+preloads added DLLs by basename. `scripts/build-custom-api-test-bundle.sh`
+demonstrates the flow with `advapi32.dll!GetUserNameA`.
 
 The build script uses the host C compiler for `exe2h` and x64 MinGW for the
 Windows images. Zig 0.17.0 was tried on macOS but rejected

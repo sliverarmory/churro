@@ -140,21 +140,20 @@ func (b LoaderBundle) validate() error {
 		b.Poly.HashRotB == 0 || b.Poly.HashRotB >= 32 {
 		return errors.New("loader bundle has invalid cipher or hash rounds")
 	}
-	if len(b.APIImports) != len(wire.DefaultAPIImports) {
-		return fmt.Errorf("loader bundle needs %d API imports", len(wire.DefaultAPIImports))
+	_, imports := b.wireMetadata()
+	if _, err := wire.DLLNamesForAPIImports(imports); err != nil {
+		return fmt.Errorf("loader bundle API imports: %w", err)
 	}
-	if b.APIImports[0].Module != "kernel32.dll" || b.APIImports[0].Name != "LoadLibraryA" {
-		return errors.New("loader bundle must keep LoadLibraryA in the first API slot")
-	}
-	want := make(map[APIImport]int, len(wire.DefaultAPIImports))
-	for _, imp := range wire.DefaultAPIImports {
-		want[APIImport{Module: imp.Module, Name: imp.Name}]++
-	}
+	// The copied native source still references every baseline API field.
+	// Custom api_master builds may reorder them and add up to three entries.
+	seen := make(map[APIImport]struct{}, len(b.APIImports))
 	for _, imp := range b.APIImports {
-		key := APIImport{Module: imp.Module, Name: imp.Name}
-		want[key]--
-		if want[key] < 0 {
-			return fmt.Errorf("loader bundle has unexpected or duplicate API import %s!%s", imp.Module, imp.Name)
+		seen[imp] = struct{}{}
+	}
+	for _, required := range wire.DefaultAPIImports {
+		imp := APIImport{Module: required.Module, Name: required.Name}
+		if _, ok := seen[imp]; !ok {
+			return fmt.Errorf("loader bundle is missing required API import %s!%s", imp.Module, imp.Name)
 		}
 	}
 	return nil

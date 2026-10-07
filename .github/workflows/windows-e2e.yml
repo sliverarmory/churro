@@ -36,10 +36,21 @@ jobs:
           ./scripts/rebuild-loader-blobs.sh --rotate --seed 0x12345678 --output-dir "$RUNNER_TEMP/churro-rotated-bundle"
           ! cmp -s "$RUNNER_TEMP/churro-rotated-bundle/poly_seed.h" internal/assets/poly_seed.h
           ! cmp -s "$RUNNER_TEMP/churro-rotated-bundle/api_shuffle.h" internal/assets/api_shuffle.h
+      - name: Build bundle with an added Advapi32 API import
+        run: |
+          ./scripts/build-custom-api-test-bundle.sh "$RUNNER_TEMP/churro-custom-api-bundle"
+          python3 -c 'import json,os; imports=json.load(open(os.path.join(os.environ["RUNNER_TEMP"],"churro-custom-api-bundle","bundle.json")))["api_imports"]; assert len(imports)==62; assert imports[0]=={"module":"kernel32.dll","name":"LoadLibraryA"}; assert {"module":"advapi32.dll","name":"GetUserNameA"} in imports'
+          go run ./cmd/churro-gen -input testdata/windows-e2e/hello.js -loader-bundle "$RUNNER_TEMP/churro-custom-api-bundle" -output "$RUNNER_TEMP/custom-api-smoke.bin"
+          test -s "$RUNNER_TEMP/custom-api-smoke.bin"
       - uses: actions/upload-artifact@v4
         with:
           name: churro-rotated-loader-bundle
           path: ${{ runner.temp }}/churro-rotated-bundle/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: churro-custom-api-loader-bundle
+          path: ${{ runner.temp }}/churro-custom-api-bundle/
           if-no-files-found: error
 
   libraries:
@@ -59,11 +70,15 @@ jobs:
         with:
           name: churro-rotated-loader-bundle
           path: ${{ runner.temp }}/churro-rotated-bundle
+      - uses: actions/download-artifact@v4
+        with:
+          name: churro-custom-api-loader-bundle
+          path: ${{ runner.temp }}/churro-custom-api-bundle
       - name: Test Go packages
         run: go test ./...
       - name: Generate and execute Windows payload loaders
         shell: pwsh
-        run: ./scripts/test-windows-e2e.ps1 -LoaderBundleDirectory "$env:RUNNER_TEMP\churro-rotated-bundle"
+        run: ./scripts/test-windows-e2e.ps1 -LoaderBundleDirectory "$env:RUNNER_TEMP\churro-rotated-bundle" -CustomImportBundleDirectory "$env:RUNNER_TEMP\churro-custom-api-bundle"
 
   clr-v2:
     name: CLR v2 managed EXE and DLL

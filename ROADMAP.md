@@ -42,9 +42,15 @@ rebuild passed. Windows execution evidence is recorded below.
   for invalid PE, export, architecture, and staging inputs.
 - [x] Support a validated custom native loader bundle with matching cipher and
   API metadata through both the Go API and CLI, without a WASM module.
+- [x] Accept added API imports in a custom native bundle up to the loader's
+  64-slot table limit; a 62-import bundle builds locally through MinGW.
 - [x] Cover legacy native CLI format/entropy/exit aliases, output naming, and
   staged-module placement where compatibility is useful; document any
   deliberate default differences.
+
+The CLI does not copy Base64 output to the Windows clipboard automatically.
+Fritter does this as a convenience side effect; Churro writes the same encoded
+output to its selected file.
 
 ## 2. Shellcode generation parity
 
@@ -77,6 +83,8 @@ rebuild passed. Windows execution evidence is recorded below.
 - [x] Exercise native header overwrite/preserve, decoy-module loading, and
   host-image continuation with explicit markers.
 - [x] Execute a custom rotated loader bundle through the public CLI on Windows.
+- [ ] Execute a 62-import native loader bundle with an added Advapi32 API
+  through the public CLI on Windows.
 - [x] Execute multiple randomized entry/decoder forms and aPLib loaders on
   Windows after the native dispatch change.
 - [ ] Execute `ExitProcess` and `ExitBlock` as bounded CLI cases with markers.

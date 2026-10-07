@@ -1,6 +1,7 @@
 param(
     [string]$BuildDirectory = "build/windows-e2e",
-    [string]$LoaderBundleDirectory = ""
+    [string]$LoaderBundleDirectory = "",
+    [string]$CustomImportBundleDirectory = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,6 +20,13 @@ if ($LoaderBundleDirectory) {
     $RotatedBundle = (Resolve-Path -LiteralPath $LoaderBundleDirectory -ErrorAction Stop).Path
     if (-not (Test-Path -LiteralPath (Join-Path $RotatedBundle "bundle.json") -PathType Leaf)) {
         throw "Rotated loader bundle manifest is missing from $RotatedBundle"
+    }
+}
+$CustomImportBundle = $null
+if ($CustomImportBundleDirectory) {
+    $CustomImportBundle = (Resolve-Path -LiteralPath $CustomImportBundleDirectory -ErrorAction Stop).Path
+    if (-not (Test-Path -LiteralPath (Join-Path $CustomImportBundle "bundle.json") -PathType Leaf)) {
+        throw "Custom-import loader bundle manifest is missing from $CustomImportBundle"
     }
 }
 
@@ -374,6 +382,15 @@ try {
         Invoke-TestCase "rotated-loader-bundle" {
             Invoke-CLILoaderCase -Label "rotated-loader-bundle" -InputPath $ImportsDll -Options @(
                 "-method", "RunImports", "-loader-bundle", $RotatedBundle
+            ) -Markers @{
+                ".imports" = "relocations and imports"
+            }
+        }
+    }
+    if ($CustomImportBundle) {
+        Invoke-TestCase "custom-api-import-bundle" {
+            Invoke-CLILoaderCase -Label "custom-api-import-bundle" -InputPath $ImportsDll -Options @(
+                "-method", "RunImports", "-loader-bundle", $CustomImportBundle
             ) -Markers @{
                 ".imports" = "relocations and imports"
             }

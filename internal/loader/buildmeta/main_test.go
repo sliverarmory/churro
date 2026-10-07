@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/sliverarmory/churro/internal/wire"
@@ -23,6 +25,10 @@ func TestPinnedHeadersParseAndSeededRotation(t *testing.T) {
 		t.Fatalf("unexpected pinned Poly constants: %+v", pinned)
 	}
 	master, err := os.ReadFile(filepath.Join(includeDir, "api_master.h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitions, err := os.ReadFile(filepath.Join(includeDir, "fritter.h"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +54,7 @@ func TestPinnedHeadersParseAndSeededRotation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	imports, err := parseAPIImports(apiData)
+	imports, err := parseAPIImports(apiData, definitions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +97,11 @@ func TestEmbeddedDefaultsMatchPinnedHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	imports, err := parseAPIImports(apiData)
+	definitions, err := os.ReadFile(filepath.Join(includeDir, "fritter.h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	imports, err := parseAPIImports(apiData, definitions)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,5 +112,29 @@ func TestEmbeddedDefaultsMatchPinnedHeaders(t *testing.T) {
 		if imp.Module != wire.DefaultAPIImports[i].Module || imp.Name != wire.DefaultAPIImports[i].Name {
 			t.Fatalf("generated Go API slot %d differs from native header", i)
 		}
+	}
+}
+
+func TestParseCustomAPIModuleAndCapacity(t *testing.T) {
+	definitions := []byte("#define KERNEL32_DLL \"kernel32.dll\"\n#define SAMPLE_DLL \"sample.dll\"\n")
+	data := []byte("XAPI(KERNEL32_DLL, \"LoadLibraryA\", TypeA, LoadLibraryA)\n" +
+		"XAPI(SAMPLE_DLL, \"ExtraExport\", TypeB, ExtraExport)\n")
+	imports, err := parseAPIImports(data, definitions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(imports) != 2 || imports[1] != (apiImport{Module: "sample.dll", Name: "ExtraExport"}) {
+		t.Fatalf("custom API import missing: %+v", imports)
+	}
+	duplicate := append(append([]byte(nil), data...), []byte("XAPI(SAMPLE_DLL, \"ExtraExport\", TypeB, ExtraExport)\n")...)
+	if _, err := parseAPIImports(duplicate, definitions); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("duplicate custom API import result = %v", err)
+	}
+	tooMany := []byte("XAPI(KERNEL32_DLL, \"LoadLibraryA\", TypeA, LoadLibraryA)\n")
+	for i := 0; i < 64; i++ {
+		tooMany = append(tooMany, []byte(fmt.Sprintf("XAPI(SAMPLE_DLL, \"ExtraExport%d\", TypeB, ExtraExport)\n", i))...)
+	}
+	if _, err := parseAPIImports(tooMany, definitions); err == nil {
+		t.Fatal("65 API imports accepted")
 	}
 }

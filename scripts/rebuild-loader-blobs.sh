@@ -3,6 +3,7 @@ set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source_dir="${root}/internal/loader"
+custom_source=false
 assets_dir="${root}/internal/assets"
 host_cc="${HOST_CC:-cc}"
 mingw_cc="${MINGW_CC:-x86_64-w64-mingw32-gcc}"
@@ -26,6 +27,12 @@ while (($#)); do
       output_dir="$2"
       shift 2
       ;;
+    --source-dir)
+      if (($# < 2)); then echo "--source-dir requires a path" >&2; exit 2; fi
+      source_dir="$2"
+      custom_source=true
+      shift 2
+      ;;
     *)
       echo "unknown option: $1" >&2
       exit 2
@@ -36,8 +43,24 @@ if [[ -n "${seed}" && "${rotate}" != true ]]; then
   echo "--seed requires --rotate" >&2
   exit 2
 fi
+if [[ "${custom_source}" == true && "${rotate}" != true ]]; then
+  echo "--source-dir requires --rotate so api_shuffle.h matches api_master.h" >&2
+  exit 2
+fi
 
-if [[ "${rotate}" != true ]]; then
+if [[ ! -d "${source_dir}/include" || ! -d "${source_dir}/loader" ]]; then
+  echo "source directory must contain include/ and loader/" >&2
+  exit 2
+fi
+source_dir="$(cd "${source_dir}" && pwd -P)"
+mkdir -p "${output_dir}"
+output_dir="$(cd "${output_dir}" && pwd -P)"
+if [[ "${custom_source}" == true && "${output_dir}" == "${assets_dir}" ]]; then
+  echo "--source-dir requires an output directory other than embedded assets" >&2
+  exit 2
+fi
+
+if [[ "${rotate}" != true && "${custom_source}" != true ]]; then
   for header in poly_seed.h api_shuffle.h api_master.h; do
     if ! cmp -s "${source_dir}/include/${header}" "${assets_dir}/${header}"; then
       echo "pinned ${header} differs between loader source and embedded assets" >&2

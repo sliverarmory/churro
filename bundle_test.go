@@ -68,3 +68,35 @@ func TestMultiSectionBundleDispatchCapacity(t *testing.T) {
 		t.Fatalf("16-section bundle accepted: %v", err)
 	}
 }
+
+func TestCustomAPIImportCapacityAndValidation(t *testing.T) {
+	bundle := EmbeddedLoaderBundle()
+	bundle.APIImports = append(bundle.APIImports, APIImport{Module: "advapi32.dll", Name: "GetUserNameA"})
+	if _, err := NewWithLoader(context.Background(), bundle); err != nil {
+		t.Fatalf("62-import bundle rejected: %v", err)
+	}
+	bundle.APIImports = append(bundle.APIImports,
+		APIImport{Module: "kernel32.dll", Name: "GetTickCount"},
+		APIImport{Module: "kernel32.dll", Name: "GetCurrentProcessId"})
+	if _, err := NewWithLoader(context.Background(), bundle); err != nil {
+		t.Fatalf("64-import bundle rejected: %v", err)
+	}
+	bundle.APIImports = append(bundle.APIImports, APIImport{Module: "kernel32.dll", Name: "GetCurrentThreadId"})
+	if _, err := NewWithLoader(context.Background(), bundle); err == nil || !strings.Contains(err.Error(), "1..64") {
+		t.Fatalf("65-import bundle result = %v", err)
+	}
+	bundle.APIImports = bundle.APIImports[:62]
+	bundle.APIImports[61] = bundle.APIImports[60]
+	if _, err := NewWithLoader(context.Background(), bundle); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("duplicate API result = %v", err)
+	}
+	bundle.APIImports[61] = APIImport{Module: "../advapi32.dll", Name: "GetUserNameA"}
+	if _, err := NewWithLoader(context.Background(), bundle); err == nil || !strings.Contains(err.Error(), "invalid DLL name") {
+		t.Fatalf("unsafe DLL name result = %v", err)
+	}
+	bundle.APIImports[61] = APIImport{Module: "advapi32.dll", Name: "GetUserNameA"}
+	bundle.APIImports[1] = APIImport{Module: "kernel32.dll", Name: "GetCurrentThreadId"}
+	if _, err := NewWithLoader(context.Background(), bundle); err == nil || !strings.Contains(err.Error(), "missing required API import") {
+		t.Fatalf("omitted baseline API result = %v", err)
+	}
+}

