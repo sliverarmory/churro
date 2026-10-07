@@ -10,9 +10,10 @@
  * one section. Use this to co-locate tight caller-callee chains so
  * the call doesn't cross a page boundary.
  *
- * MSVC only: under gcc/mingw the macro is a no-op (the single-.text
- * + -fno-toplevel-reorder layout produced by the existing build
- * has not exposed the cross-page-loop bug in practice). */
+ * MSVC uses code_seg and MinGW uses a function section attribute. Both
+ * produce named code sections for exe2h's function and cross-section
+ * reference tables. The generated blob is packed by exe2h, so runtime
+ * dispatch operates on the packed section offsets, not PE RVAs. */
 
 #ifndef FRITTER_POLY_SECTION_H
 #define FRITTER_POLY_SECTION_H
@@ -23,7 +24,7 @@
 #ifdef _MSC_VER
 #  define LOADER_FN_SECTION(name_str) __declspec(code_seg(name_str))
 #else
-#  define LOADER_FN_SECTION(name_str)
+#  define LOADER_FN_SECTION(name_str) __attribute__((section(name_str)))
 #endif
 
 #endif /* FRITTER_POLY_SECTION_H */

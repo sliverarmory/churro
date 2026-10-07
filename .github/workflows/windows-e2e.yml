@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   libraries:
-    name: Native and Go DLL loaders
+    name: Windows payload formats and staging
     runs-on: windows-2022
     timeout-minutes: 40
     steps:
@@ -25,7 +25,7 @@ jobs:
           cache: false
       - name: Test Go packages
         run: go test ./...
-      - name: Generate and execute Windows DLL loaders
+      - name: Generate and execute Windows payload loaders
         shell: pwsh
         run: ./scripts/test-windows-e2e.ps1
 

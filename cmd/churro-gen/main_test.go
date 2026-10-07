@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/binary"
 	"strings"
 	"testing"
 
@@ -16,10 +17,13 @@ func TestParseFormat(t *testing.T) {
 		{"bin", churro.FormatBinary},
 		{"BINARY", churro.FormatBinary},
 		{"base64", churro.FormatBase64},
+		{"2", churro.FormatBase64},
 		{"c", churro.FormatC},
 		{"ruby", churro.FormatRuby},
+		{"rb", churro.FormatRuby},
 		{"python", churro.FormatPython},
 		{"powershell", churro.FormatPowerShell},
+		{"ps", churro.FormatPowerShell},
 		{"csharp", churro.FormatCSharp},
 		{"hex", churro.FormatHex},
 		{"uuid", churro.FormatUUID},
@@ -32,6 +36,34 @@ func TestParseFormat(t *testing.T) {
 	}
 	if _, err := parseFormat("wat"); err == nil {
 		t.Fatal("unknown format accepted")
+	}
+}
+
+func TestLegacyOptionValuesAndDefaults(t *testing.T) {
+	if got := defaultOutputForFormat(churro.FormatC); got != "loader.c" {
+		t.Fatalf("C default output = %q", got)
+	}
+	if got := defaultOutputForFormat(churro.FormatUUID); got != "loader.uuid" {
+		t.Fatalf("UUID default output = %q", got)
+	}
+	if got, err := parseExit("2"); err != nil || got != churro.ExitProcess {
+		t.Fatalf("legacy exit = %v, %v", got, err)
+	}
+	if got, err := parseEntropy("low"); err != nil || got != churro.EntropyNames {
+		t.Fatalf("legacy entropy = %v, %v", got, err)
+	}
+	if got, err := parseHeaders("2"); err != nil || got != churro.PEHeadersPreserve {
+		t.Fatalf("legacy headers = %v, %v", got, err)
+	}
+	if got, err := parseCompression("aplib"); err != nil || got != churro.CompressionAPLib {
+		t.Fatalf("compression = %v, %v", got, err)
+	}
+	continuation, err := parseContinuation("0x1a2b")
+	if err != nil || continuation == nil || continuation.EntryPointRVA != 0x1a2b {
+		t.Fatalf("hex continuation = %#v, %v", continuation, err)
+	}
+	if _, err := parseContinuation("not-hex"); err == nil {
+		t.Fatal("invalid host continuation accepted")
 	}
 }
 
@@ -61,6 +93,11 @@ func TestCLIArgumentErrors(t *testing.T) {
 	if code := run([]string{"-version"}, &stdout, &stderr); code != 0 || !strings.Contains(stdout.String(), "churro-gen") {
 		t.Fatalf("version: exit=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"-i", "missing.exe", "-g", "2"}, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "deprecated") {
+		t.Fatalf("invalid legacy chunked option: exit=%d stderr=%q", code, stderr.String())
+	}
 }
 
 func TestStagingForFlags(t *testing.T) {
@@ -77,4 +114,53 @@ func TestStagingForFlags(t *testing.T) {
 	if staging.ModuleName != "PAYLOAD" || staging.BaseURL.String() != "https://example.test/objects/" {
 		t.Fatalf("staging = %#v", staging)
 	}
+}
+
+func TestNativeArgumentFlagsMapToTypedPayload(t *testing.T) {
+	exe, err := payloadForPath("payload.exe", cliSyntheticPE(false), payloadOptions{arguments: `one "two words"`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeEXE, ok := exe.(churro.NativeExecutable)
+	if !ok || nativeEXE.Arguments != `one "two words"` {
+		t.Fatalf("native EXE payload = %#v", exe)
+	}
+	dll, err := payloadForPath("payload.dll", cliSyntheticPE(true), payloadOptions{
+		method: "RunW", arguments: "hello", unicode: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeDLL, ok := dll.(churro.NativeDLL)
+	if !ok || nativeDLL.Export == nil || nativeDLL.Export.Arguments != "hello" || !nativeDLL.Export.Unicode {
+		t.Fatalf("native DLL payload = %#v", dll)
+	}
+	if _, err := payloadForPath("payload.dll", cliSyntheticPE(true), payloadOptions{arguments: "hello"}); err == nil {
+		t.Fatal("DLL argument without export accepted")
+	}
+}
+
+func cliSyntheticPE(dll bool) []byte {
+	image := make([]byte, 0x400)
+	copy(image, "MZ")
+	binary.LittleEndian.PutUint32(image[0x3c:], 0x80)
+	copy(image[0x80:], "PE\x00\x00")
+	fh := image[0x84:]
+	binary.LittleEndian.PutUint16(fh[0:], 0x8664)
+	binary.LittleEndian.PutUint16(fh[2:], 1)
+	binary.LittleEndian.PutUint16(fh[16:], 240)
+	if dll {
+		binary.LittleEndian.PutUint16(fh[18:], 0x2000)
+	}
+	opt := image[0x98:]
+	binary.LittleEndian.PutUint16(opt, 0x20b)
+	binary.LittleEndian.PutUint32(opt[60:], 0x200)
+	binary.LittleEndian.PutUint32(opt[108:], 16)
+	sec := image[0x188:]
+	copy(sec, ".rdata")
+	binary.LittleEndian.PutUint32(sec[8:], 0x200)
+	binary.LittleEndian.PutUint32(sec[12:], 0x1000)
+	binary.LittleEndian.PutUint32(sec[16:], 0x200)
+	binary.LittleEndian.PutUint32(sec[20:], 0x200)
+	return image
 }

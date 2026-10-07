@@ -101,6 +101,73 @@ func TestNativeDLLExportValidation(t *testing.T) {
 	}
 }
 
+func TestNativeArgumentsAndUnicodeWireLayout(t *testing.T) {
+	dll := syntheticPE(true, false, "HelloWorld")
+	instance, _, _, err := Build(Config{
+		Payload: dll, ModuleType: ModuleNativeDLL, Method: "HelloWorld",
+		Arguments: "hello world", Unicode: true, Entropy: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mod := instance[instanceModOff:]
+	if got := cString(mod[1036:1292]); got != "hello world" {
+		t.Fatalf("DLL argument = %q", got)
+	}
+	if got := u32(mod, 1296); got != 1 {
+		t.Fatalf("DLL Unicode flag = %d", got)
+	}
+	_, _, _, err = Build(Config{Payload: dll, ModuleType: ModuleNativeDLL, Arguments: "hello", Entropy: 1})
+	if err == nil || !strings.Contains(err.Error(), "require an export") {
+		t.Fatalf("DLL arguments without export: %v", err)
+	}
+
+	exe := syntheticPE(false, false, "")
+	instance, _, _, err = Build(Config{
+		Payload: exe, ModuleType: ModuleNativeExecutable,
+		Arguments: `one "two words"`, Entropy: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mod = instance[instanceModOff:]
+	if got := cString(mod[1036:1292]); got != `AAAA one "two words"` {
+		t.Fatalf("EXE command line = %q", got)
+	}
+	if got := u32(mod, 1296); got != 0 {
+		t.Fatalf("EXE Unicode flag = %d", got)
+	}
+	_, _, _, err = Build(Config{Payload: exe, ModuleType: ModuleNativeExecutable, Unicode: true, Entropy: 1})
+	if err == nil || !strings.Contains(err.Error(), "native DLL") {
+		t.Fatalf("Unicode flag on EXE: %v", err)
+	}
+}
+
+func TestAPLibModuleHeaderAndPayload(t *testing.T) {
+	payload := bytes.Repeat([]byte("ABCDABCDABCD"), 128)
+	instance, _, _, err := Build(Config{
+		Payload: payload, ModuleType: ModuleJScript,
+		Compression: 2, Entropy: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mod := instance[instanceModOff:]
+	if got := u32(mod, 8); got != 2 {
+		t.Fatalf("module compression = %d", got)
+	}
+	if got := u32(mod, 1324); got != uint32(len(payload)) {
+		t.Fatalf("module uncompressed length = %d", got)
+	}
+	zlen := int(u32(mod, 1320))
+	if zlen == 0 || zlen >= len(payload) {
+		t.Fatalf("compressed payload length = %d", zlen)
+	}
+	if _, err := referenceDepack(mod[moduleDataOffset:moduleDataOffset+zlen], payload); err != nil {
+		t.Fatalf("packed module does not round-trip: %v", err)
+	}
+}
+
 func TestManagedPEModeAndRuntime(t *testing.T) {
 	image := syntheticPE(false, true, "")
 	instance, _, _, err := Build(Config{Payload: image, ModuleType: ModuleDotNetExecutable, Entropy: 1})

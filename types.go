@@ -17,6 +17,7 @@ type Request struct {
 type LoaderConfig struct {
 	Exit             ExitBehavior
 	Entropy          Entropy
+	Compression      Compression
 	HostContinuation *HostImageContinuation
 }
 
@@ -58,9 +59,10 @@ const (
 
 // NativeExecutable describes an unmanaged Windows executable image.
 type NativeExecutable struct {
-	Image []byte
-	Flags NativeExecutableFlags
-	PE    NativePEConfig
+	Image     []byte
+	Arguments string
+	Flags     NativeExecutableFlags
+	PE        NativePEConfig
 }
 
 func (NativeExecutable) churroPayload() {}
@@ -77,8 +79,7 @@ const (
 const nativeExecutableFlagsMask = NativeExecutableRunInThread
 
 // NativeDLL describes an unmanaged Windows DLL image. DllMain is always
-// invoked. Export optionally selects one parameterless export to invoke after
-// DllMain returns.
+// invoked. Export optionally selects a named export to invoke afterward.
 type NativeDLL struct {
 	Image  []byte
 	Export *NativeDLLExport
@@ -87,9 +88,13 @@ type NativeDLL struct {
 
 func (NativeDLL) churroPayload() {}
 
-// NativeDLLExport identifies a parameterless native DLL export.
+// NativeDLLExport identifies a native DLL export. When Arguments is empty,
+// the export is called without a parameter. Otherwise the loader passes one
+// pointer to the argument string, encoded as UTF-8 or UTF-16 as selected.
 type NativeDLLExport struct {
-	Name string
+	Name      string
+	Arguments string
+	Unicode   bool
 }
 
 // DotNetRuntime configures managed payload hosting. Empty fields use the
@@ -207,4 +212,14 @@ const (
 	EntropyNames
 	// EntropyNone disables optional name and cryptographic randomization.
 	EntropyNone
+)
+
+// Compression selects the payload module encoding before optional encryption.
+type Compression uint8
+
+const (
+	// CompressionNone leaves the payload bytes unchanged and is the default.
+	CompressionNone Compression = iota
+	// CompressionAPLib uses the loader's aPLib decoder.
+	CompressionAPLib
 )

@@ -1,21 +1,46 @@
-# Native loader source
+# Native loader build source
 
-This is the build-time source for Churro's embedded x64 Windows loader images.
-It is based on the required Fritter C source at commit
-`ff952a22b1cf06d41b3781ab7c20f608b9754e53`, with one runtime TLS fix in
-`loader/inmem_pe.c`. The loader, shim, PE extractor, and required headers are
-kept here so `scripts/rebuild-loader-blobs.sh` does not depend on the sibling
-Fritter checkout. The pinned Poly and API headers match `internal/assets/`.
+This directory contains the build-time C source, PE extractor, and Go build
+tools for Churro's embedded x64 Windows loader images. It comes from Fritter
+commit `ff952a22b1cf06d41b3781ab7c20f608b9754e53`. The Churro host
+generator remains Go; these sources are used only when regenerating the
+native loader bundle.
 
-The build script uses MinGW for the Windows images and the host C compiler
-for `exe2h`. Zig 0.17.0 was tried on macOS but rejected
-`-fno-toplevel-reorder`; without that flag, its Windows GNU target lacked
-target C headers. MinGW 16.2.0 reproduced the original image byte for byte
-before the TLS fix.
+Churro carries these source changes:
 
-The copied source omits the upstream `aplib.h` and `depack.h` files, whose
-declarations are unnecessary here except for the one locally declared
-`aP_depack` prototype. It also omits the upstream `pshpack*.h` and
-`poppack.h` files; `include/pe.h` now scopes the DOS header's required pack
-alignment with local `#pragma pack(push, ...)` and `#pragma pack(pop)`.
-Removing these headers does not change any of the three generated image hashes.
+- `loader/inmem_pe.c` reads the TLS directory RVA from saved `ntc`, after the
+  original mapped header may have been unmapped or overwritten.
+- `include/poly_section.h` uses named MinGW code sections for tagged loader
+  functions. `exe2h` packs the six loader sections and emits function and
+  cross-section reference tables. `table2json` converts those tables to the
+  metadata Churro needs for per-function dispatch.
+- Local declarations replace the unused upstream `aplib.h`, `depack.h`, and
+  Microsoft packing headers. The copied `loader/depack.c` is the runtime
+  aPLib-compatible decoder. `internal/wire/aplib.go` is an independently
+  written Go encoder for the same token stream; it does not copy a third-party
+  packer implementation. The copied Fritter source and our changes are
+  distributed under the repository's BSD 3-Clause license.
+
+`scripts/rebuild-loader-blobs.sh` builds both PEB variants and the dispatch
+shim with x64 MinGW, then emits `*.bin`, `*_metadata.json`, and `bundle.json`
+into `internal/assets/`. It checks the pinned Poly/API headers before a normal
+rebuild. The manifest includes image hashes and the Poly/API metadata compiled
+into those images. `buildmeta` also generates the matching Go defaults in
+`internal/wire/generated_constants.go` for an embedded rebuild.
+
+To create a reproducible custom build without changing embedded assets:
+
+```sh
+./scripts/rebuild-loader-blobs.sh --rotate --seed 0x12345678 --output-dir /tmp/churro-loader-bundle
+```
+
+Use `-loader-bundle /tmp/churro-loader-bundle` with the CLI. `--rotate`
+without `--seed` chooses a fresh seed; the generated `poly_seed.h` and
+`api_shuffle.h` are included in the output directory. Repeating a seed with
+the same compiler and source tree reproduces the Poly/API choices. The two
+PEB images remain separate to preserve the loader's PEB walk variation.
+
+The build script uses the host C compiler for `exe2h` and x64 MinGW for the
+Windows images. Zig 0.17.0 was tried on macOS but rejected
+`-fno-toplevel-reorder`; without that flag its Windows GNU target lacked
+target C headers. MinGW is the validated image compiler for this source.

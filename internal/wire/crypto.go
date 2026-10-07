@@ -15,16 +15,6 @@ type Poly struct {
 	HashRounds      uint32
 }
 
-// DefaultPoly matches the loader blobs in internal/assets (build seed
-// 0xDA44B96C). Keep this in step with poly_seed.h when rebuilding those blobs.
-var DefaultPoly = Poly{
-	CipherRotations: [6]uint32{4, 4, 16, 23, 22, 11},
-	CipherRounds:    20,
-	HashRotA:        3,
-	HashRotB:        13,
-	HashRounds:      27,
-}
-
 func (p Poly) normalized() Poly {
 	if p.CipherRounds == 0 && p.HashRounds == 0 {
 		return DefaultPoly

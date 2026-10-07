@@ -71,6 +71,54 @@ function Assert-Markers(
     }
 }
 
+function Clear-Markers([string]$Prefix, [System.Collections.IDictionary]$Markers) {
+    foreach ($Suffix in $Markers.Keys) {
+        $Marker = "$Prefix$Suffix"
+        if (Test-Path -LiteralPath $Marker) {
+            Remove-Item -LiteralPath $Marker -ErrorAction Stop
+        }
+    }
+}
+
+$script:Failures = @()
+
+function Invoke-TestCase([string]$Label, [scriptblock]$Body) {
+    try {
+        & $Body
+        Write-Host "Passed $Label"
+    }
+    catch {
+        $Message = $_.Exception.Message
+        Write-Host "FAILED $Label`: $Message"
+        $script:Failures += "$Label`: $Message"
+    }
+}
+
+function Invoke-CLILoaderCase(
+    [string]$Label,
+    [string]$InputPath,
+    [string[]]$Options,
+    [System.Collections.IDictionary]$Markers
+) {
+    $Loader = Join-Path $BuildPath "$Label.bin"
+    $env:CHURRO_E2E_PREFIX = Join-Path $BuildPath $Label
+    Clear-Markers $env:CHURRO_E2E_PREFIX $Markers
+    Write-Host "Generating and executing $Label through public churro-gen CLI"
+    Invoke-Checked "generate $Label" {
+        & $CliExe -input $InputPath -output $Loader @Options
+    }
+    if (-not (Test-Path $Loader -PathType Leaf) -or (Get-Item $Loader).Length -eq 0) {
+        throw "$Label returned an empty loader"
+    }
+    $RunnerOutput = @(& $RunnerExe -input $Loader -timeout 45s 2>&1)
+    $RunnerExitCode = $LASTEXITCODE
+    $RunnerOutput | ForEach-Object { Write-Host $_ }
+    if ($RunnerOutput -notcontains "shellcode thread returned") {
+        throw "$Label runner did not report shellcode completion"
+    }
+    Assert-Markers $Label $env:CHURRO_E2E_PREFIX $Markers $RunnerExitCode
+}
+
 Push-Location $Root
 try {
     $GenerateExe = Join-Path $BuildPath "generate.exe"
@@ -79,6 +127,11 @@ try {
     $LifecycleDll = Join-Path $BuildPath "native-lifecycle.dll"
     $ImportsDll = Join-Path $BuildPath "native-imports.dll"
     $GoDll = Join-Path $BuildPath "go-dll.dll"
+    $NativeExe = Join-Path $BuildPath "native-executable.exe"
+    $ManagedExe = Join-Path $BuildPath "managed-executable.exe"
+    $ManagedDll = Join-Path $BuildPath "managed-library.dll"
+    $StagedExe = Join-Path $BuildPath "staged.exe"
+    $ContinuationExe = Join-Path $BuildPath "host-continuation.exe"
 
     Invoke-Checked "build generator" { go build -o $GenerateExe ./testdata/windows-e2e/generate }
     Invoke-Checked "build public CLI" { go build -o $CliExe ./cmd/churro-gen }
@@ -92,21 +145,38 @@ try {
     Invoke-Checked "build Go DLL" {
         go build -buildmode=c-shared -o $GoDll ./testdata/windows-e2e/go-dll
     }
+    Invoke-Checked "build native EXE" {
+        & $Gcc -O2 -o $NativeExe ./testdata/windows-e2e/native-executable.c
+    }
+    Invoke-Checked "build host continuation runner" {
+        & $Gcc -O2 -o $ContinuationExe ./testdata/windows-e2e/host-continuation.c
+    }
+    Invoke-Checked "build staged HTTP and HTTPS test" {
+        go build -o $StagedExe ./testdata/windows-e2e/staged
+    }
+    $Csc = @(
+        (Join-Path $env:WINDIR "Microsoft.NET\Framework64\v4.0.30319\csc.exe"),
+        (Join-Path $env:WINDIR "Microsoft.NET\Framework\v4.0.30319\csc.exe")
+    ) | Where-Object { Test-Path $_ -PathType Leaf } | Select-Object -First 1
+    if (-not $Csc) {
+        $CscCommand = Get-Command csc.exe -ErrorAction SilentlyContinue
+        if ($CscCommand) { $Csc = $CscCommand.Source }
+    }
+    if (-not $Csc) {
+        throw "The .NET Framework 4 C# compiler was not found"
+    }
+    Invoke-Checked "build managed EXE" {
+        & $Csc /nologo /target:exe /platform:x64 "/out:$ManagedExe" ./testdata/windows-e2e/managed.cs
+    }
+    Invoke-Checked "build managed DLL" {
+        & $Csc /nologo /target:library /platform:x64 "/out:$ManagedDll" ./testdata/windows-e2e/managed.cs
+    }
 
-    $CliLabel = "go-dll-cli"
-    $CliLoader = Join-Path $BuildPath "$CliLabel.bin"
-    $env:CHURRO_E2E_PREFIX = Join-Path $BuildPath $CliLabel
-    Write-Host "Generating and executing $CliLabel through public churro-gen CLI"
-    Invoke-Checked "generate $CliLabel" {
-        & $CliExe -input $GoDll -method HelloWorld -output $CliLoader
+    Invoke-TestCase "go-dll-cli" {
+        Invoke-CLILoaderCase -Label "go-dll-cli" -InputPath $GoDll -Options @("-method", "HelloWorld") -Markers @{
+            ".go" = "hello from Go DLL"
+        }
     }
-    if (-not (Test-Path $CliLoader -PathType Leaf) -or (Get-Item $CliLoader).Length -eq 0) {
-        throw "$CliLabel returned an empty loader"
-    }
-    & $RunnerExe -input $CliLoader -timeout 45s
-    $CliRunnerExitCode = $LASTEXITCODE
-    Assert-Markers $CliLabel $env:CHURRO_E2E_PREFIX @{ ".go" = "hello from Go DLL" } $CliRunnerExitCode
-    Write-Host "Passed $CliLabel"
 
     $Cases = @(
         @{ Name = "go-dll"; Dll = $GoDll; Export = "HelloWorld";
@@ -120,23 +190,115 @@ try {
     foreach ($Case in $Cases) {
         for ($Attempt = 1; $Attempt -le 2; $Attempt++) {
             $Label = "$( $Case.Name )-$($Attempt.ToString('D2'))"
-            $Loader = Join-Path $BuildPath "$Label.bin"
-            $Headers = if ($Attempt -eq 1) { "overwrite" } else { "preserve" }
-            $env:CHURRO_E2E_PREFIX = Join-Path $BuildPath $Label
-            Write-Host "Generating and executing $Label (headers=$Headers)"
-            Invoke-Checked "generate $Label" {
-                & $GenerateExe -dll $Case.Dll -export $Case.Export -headers $Headers -out $Loader
+            Invoke-TestCase $Label {
+                $Loader = Join-Path $BuildPath "$Label.bin"
+                $Headers = if ($Attempt -eq 1) { "overwrite" } else { "preserve" }
+                $env:CHURRO_E2E_PREFIX = Join-Path $BuildPath $Label
+                Clear-Markers $env:CHURRO_E2E_PREFIX $Case.Markers
+                Write-Host "Generating and executing $Label (headers=$Headers)"
+                Invoke-Checked "generate $Label" {
+                    & $GenerateExe -dll $Case.Dll -export $Case.Export -headers $Headers -out $Loader
+                }
+                if (-not (Test-Path $Loader -PathType Leaf) -or (Get-Item $Loader).Length -eq 0) {
+                    throw "$Label returned an empty loader"
+                }
+                $RunnerOutput = @(& $RunnerExe -input $Loader -timeout 45s 2>&1)
+                $RunnerExitCode = $LASTEXITCODE
+                $RunnerOutput | ForEach-Object { Write-Host $_ }
+                if ($RunnerOutput -notcontains "shellcode thread returned") {
+                    throw "$Label runner did not report shellcode completion"
+                }
+                Assert-Markers $Label $env:CHURRO_E2E_PREFIX $Case.Markers $RunnerExitCode
             }
-            if (-not (Test-Path $Loader -PathType Leaf) -or (Get-Item $Loader).Length -eq 0) {
-                throw "$Label returned an empty loader"
-            }
-            & $RunnerExe -input $Loader -timeout 45s
-            $RunnerExitCode = $LASTEXITCODE
-            Assert-Markers $Label $env:CHURRO_E2E_PREFIX $Case.Markers $RunnerExitCode
-            Write-Host "Passed $Label"
         }
     }
-    Write-Host "All native and Go DLL loader tests passed"
+
+    Invoke-TestCase "native-executable" {
+        Invoke-CLILoaderCase -Label "native-executable" -InputPath $NativeExe -Options @("-thread", "-args", "churro-exe-argument") -Markers @{
+            ".exe" = "native executable entry"
+            ".argv" = "native executable arguments"
+        }
+    }
+    Invoke-TestCase "native-args-ansi" {
+        Invoke-CLILoaderCase -Label "native-args-ansi" -InputPath $ImportsDll -Options @("-method", "RunArgsA", "-args", "churro-ansi-argument") -Markers @{
+            ".args-ansi" = "ANSI argument received"
+        }
+    }
+    Invoke-TestCase "native-args-unicode" {
+        Invoke-CLILoaderCase -Label "native-args-unicode" -InputPath $ImportsDll -Options @("-method", "RunArgsW", "-args", "churro-wide-argument", "-unicode") -Markers @{
+            ".args-wide" = "Unicode argument received"
+        }
+    }
+    Invoke-TestCase "managed-executable" {
+        Invoke-CLILoaderCase -Label "managed-executable" -InputPath $ManagedExe -Options @() -Markers @{
+            ".managed-exe" = "managed executable entry"
+        }
+    }
+    Invoke-TestCase "managed-library" {
+        Invoke-CLILoaderCase -Label "managed-library" -InputPath $ManagedDll -Options @("-class", "ChurroE2E", "-method", "Run") -Markers @{
+            ".managed-dll" = "managed static method"
+        }
+    }
+    Invoke-TestCase "vbscript" {
+        Invoke-CLILoaderCase -Label "vbscript" -InputPath (Join-Path $Root "testdata/windows-e2e/hello.vbs") -Options @() -Markers @{
+            ".vbs" = "VBScript executed"
+        }
+    }
+    Invoke-TestCase "jscript" {
+        Invoke-CLILoaderCase -Label "jscript" -InputPath (Join-Path $Root "testdata/windows-e2e/hello.js") -Options @() -Markers @{
+            ".js" = "JScript executed"
+        }
+    }
+    Invoke-TestCase "native-decoy" {
+        $Decoy = Join-Path $env:WINDIR "System32\kernel32.dll"
+        if (-not (Test-Path $Decoy -PathType Leaf)) {
+            throw "native decoy module is missing: $Decoy"
+        }
+        Invoke-CLILoaderCase -Label "native-decoy" -InputPath $ImportsDll -Options @("-method", "RunImports", "-decoy", $Decoy) -Markers @{
+            ".imports" = "relocations and imports"
+        }
+    }
+    Invoke-TestCase "native-aplib" {
+        Invoke-CLILoaderCase -Label "native-aplib" -InputPath $ImportsDll -Options @("-method", "RunImports", "-compression", "aplib") -Markers @{
+            ".imports" = "relocations and imports"
+        }
+    }
+    Invoke-TestCase "custom-loader-bundle" {
+        Invoke-CLILoaderCase -Label "custom-loader-bundle" -InputPath $ImportsDll -Options @(
+            "-method", "RunImports", "-loader-bundle", (Join-Path $Root "internal/assets")
+        ) -Markers @{
+            ".imports" = "relocations and imports"
+        }
+    }
+    Invoke-TestCase "authenticated HTTP and HTTPS staging" {
+        Invoke-Checked "execute staged loaders" {
+            & $StagedExe -dll $ImportsDll -runner $RunnerExe -out-dir $BuildPath
+        }
+    }
+    Invoke-TestCase "host-continuation" {
+        $HostRVA = & $ContinuationExe --rva
+        if ($LASTEXITCODE -ne 0 -or $HostRVA -notmatch '^[0-9]+$') {
+            throw "query host continuation RVA failed: $HostRVA"
+        }
+        $Label = "host-continuation"
+        $Loader = Join-Path $BuildPath "$Label.bin"
+        $env:CHURRO_E2E_PREFIX = Join-Path $BuildPath $Label
+        $HostMarkers = @{
+            ".continued" = "host thread continued"
+            ".imports" = "relocations and imports"
+        }
+        Clear-Markers $env:CHURRO_E2E_PREFIX $HostMarkers
+        Invoke-Checked "generate host continuation loader" {
+            & $GenerateExe -dll $ImportsDll -export RunImports -host-rva $HostRVA -out $Loader
+        }
+        & $ContinuationExe --loader $Loader
+        $RunnerExitCode = $LASTEXITCODE
+        Assert-Markers $Label $env:CHURRO_E2E_PREFIX $HostMarkers $RunnerExitCode
+    }
+    if ($script:Failures.Count -ne 0) {
+        throw "$($script:Failures.Count) Windows E2E cases failed: $($script:Failures -join ' | ')"
+    }
+    Write-Host "All Windows loader cases passed"
 }
 finally {
     Remove-Item Env:CHURRO_E2E_PREFIX -ErrorAction SilentlyContinue

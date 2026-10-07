@@ -33,15 +33,15 @@ type peImage struct {
 func inspectPE(image []byte, export string) (peInfo, error) {
 	file, err := parsePE(image)
 	if err != nil {
-		return peInfo{}, err
+		return peInfo{}, &Failure{Kind: FailureFileInvalid, Err: err}
 	}
 	dll := file.character&0x2000 != 0 // IMAGE_FILE_DLL
 	managed := file.comRVA != 0
 	if managed && file.exportRVA != 0 {
-		return peInfo{}, fmt.Errorf("mixed native and managed assemblies are unsupported")
+		return peInfo{}, fail(FailureMixedAssembly, "mixed native and managed assemblies are unsupported")
 	}
 	if !managed && (file.machine != 0x8664 || file.magic != 0x20b) {
-		return peInfo{}, fmt.Errorf("native PE payload must be x64")
+		return peInfo{}, fail(FailureArchitectureMismatch, "native PE payload must be x64")
 	}
 	info := peInfo{}
 	if managed {
@@ -59,10 +59,10 @@ func inspectPE(image []byte, export string) (peInfo, error) {
 	if export != "" && info.moduleType == ModuleNativeDLL {
 		found, err := file.hasNamedExport(export)
 		if err != nil {
-			return peInfo{}, err
+			return peInfo{}, &Failure{Kind: FailureFileInvalid, Err: err}
 		}
 		if !found {
-			return peInfo{}, fmt.Errorf("native DLL does not export %q", export)
+			return peInfo{}, fail(FailureDLLExport, "native DLL does not export %q", export)
 		}
 	}
 	return info, nil
