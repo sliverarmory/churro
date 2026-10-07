@@ -18,6 +18,8 @@ Output formats are `bin`, `base64`, `c`, `ruby`, `python`, `powershell`,
 `loader.uuid` according to the format. The CLI uses the Go aPLib packer by
 default, matching Fritter's native CLI; `-compression none` leaves module bytes
 uncompressed. The Go API retains its zero-value `CompressionNone` default.
+Base64 output is written to the selected file; the CLI does not also copy it
+to the Windows clipboard as Fritter's native CLI does.
 
 For HTTP staging, set `-server` to an HTTP or HTTPS base URL and optionally
 set `-modname` to an eight-byte-or-shorter module filename. The CLI writes the

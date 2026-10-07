@@ -25,7 +25,7 @@ Publication requires a tagged release and independently verified hashes.
 Baseline proof: [Windows Actions run 37554694955](https://github.com/sliverarmory/churro/actions/runs/37554694955)
 at `0cff53bd0733d353c642ba8cff346894a74a8552`.
 
-Implementation checkpoint: [draft PR #1](https://github.com/sliverarmory/churro/pull/1)
+Implementation checkpoint: [PR #1](https://github.com/sliverarmory/churro/pull/1)
 on `feat/fritter-parity`. Local `go test ./...`, `go test -race ./...`,
 `go vet ./...`, all 11 cross-builds, and a byte-for-byte pinned loader
 rebuild passed. Windows execution evidence is recorded below.
@@ -73,9 +73,9 @@ output to its selected file.
 - [x] Execute native EXE payloads, including thread mode and process-exit
   interception, in a bounded Windows test.
 - [x] Execute managed EXE and DLL fixtures under CLR v4.
-- [ ] Execute managed EXE and DLL argument fixtures under CLR v4, including a
+- [x] Execute managed EXE and DLL argument fixtures under CLR v4, including a
   quoted argument.
-- [ ] Execute managed EXE and DLL fixtures under CLR v2 on a runner with the
+- [x] Execute managed EXE and DLL fixtures under CLR v2 on a runner with the
   .NET Framework 3.5 Windows feature installed.
 - [x] Execute VBScript and JScript fixtures and verify their observable result.
 - [x] Execute HTTP and HTTPS staged modules, including Basic Authentication and
@@ -83,15 +83,15 @@ output to its selected file.
 - [x] Exercise native header overwrite/preserve, decoy-module loading, and
   host-image continuation with explicit markers.
 - [x] Execute a custom rotated loader bundle through the public CLI on Windows.
-- [ ] Execute a 62-import native loader bundle with an added Advapi32 API
+- [x] Execute a 62-import native loader bundle with an added Advapi32 API
   through the public CLI on Windows.
 - [x] Execute multiple randomized entry/decoder forms and aPLib loaders on
   Windows after the native dispatch change.
-- [ ] Execute `ExitProcess` and `ExitBlock` as bounded CLI cases with markers.
-- [ ] Execute native DLL loaders with `EntropyNone` and `EntropyNames`.
+- [x] Execute `ExitProcess` and `ExitBlock` as bounded CLI cases with markers.
+- [x] Execute native DLL loaders with `EntropyNone` and `EntropyNames`.
 - [x] Stress public generator reuse, concurrency, output uniqueness, and
   staged-request immutability.
-- [ ] Repeat the generated Sliver session check after all loader changes and
+- [x] Repeat the generated Sliver session check after all loader changes and
   require a matching `SessionOpenedEvent` plus `GetSessions` entry.
 
 ## 4. Distribution
@@ -105,5 +105,25 @@ output to its selected file.
 
 ## Completion evidence
 
-Record the final commit SHA, Windows run and job URLs, Sliver session event ID,
-release tag and artifact hashes here when each milestone is complete.
+The implementation commit is `dfff600419af817798894ee9a7df570b60225b93`.
+Its [Windows payload job](https://github.com/sliverarmory/churro/actions/runs/37567275171/job/112617978831)
+passed 27 cases, including the added-import native bundle, CLR v4 arguments,
+entropy and exit modes. The [CLR v2 job](https://github.com/sliverarmory/churro/actions/runs/37567275171/job/112617751451)
+passed managed EXE and DLL cases with and without quoted arguments. The
+[native bundle build job](https://github.com/sliverarmory/churro/actions/runs/37567275171/job/112617751315)
+compiled the 62-import image and generated a CLI loader from it. All 11 CLI
+archives from this run were checked independently: archive SHA-256 sidecars,
+commit sidecars, embedded `SOURCE_COMMIT`, nonempty binaries, and the five
+packaged documentation files matched the implementation commit. The sorted
+checksum-manifest SHA-256 is
+`0fd26a096eb5e0f02962be0978ca6e2c0a37aa7876df653c6f96193f08586b41`.
+
+The complete [Windows Actions run 37567275171](https://github.com/sliverarmory/churro/actions/runs/37567275171)
+passed 16 of 16 jobs at the implementation commit. Its
+[Sliver session job](https://github.com/sliverarmory/churro/actions/runs/37567275171/job/112617751554)
+observed `SessionOpenedEvent` ID
+`1a2b074b-50e3-4df6-a3b9-de131552222b` on mTLS and confirmed the same
+session in `GetSessions`.
+
+Tagged-release publication remains pending; no release tag or release assets
+have been published.
