@@ -34,7 +34,7 @@ static BOOL write_marker(const char *suffix, const char *value) {
 
 int main(void) {
     const char value[] = "native executable entry";
-    if (!write_marker(".exe", value)) return 2;
+    if (!write_marker(".entry", value)) return 2;
     if (!contains_argument(GetCommandLineW(), L"churro-exe-argument")) return 3;
     if (!write_marker(".argv", "native executable arguments")) return 4;
     /* The loader must redirect this imported exit call to thread exit. */

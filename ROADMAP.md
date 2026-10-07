@@ -24,10 +24,10 @@ release item requires a published artifact and independently verified hashes.
 Baseline proof: [Windows Actions run 37554694955](https://github.com/sliverarmory/churro/actions/runs/37554694955)
 at `0cff53bd0733d353c642ba8cff346894a74a8552`.
 
-Implementation checkpoint: `c8d1d3d` on `feat/fritter-parity`. Local
-`go test ./...`, `go test -race ./...`, `go vet ./...`, all 11 cross-builds,
-and a byte-for-byte pinned loader rebuild passed. Windows execution remains
-pending for this checkpoint.
+Implementation checkpoint: [draft PR #1](https://github.com/sliverarmory/churro/pull/1)
+on `feat/fritter-parity`. Local `go test ./...`, `go test -race ./...`,
+`go vet ./...`, all 11 cross-builds, and a byte-for-byte pinned loader
+rebuild passed. Windows execution remains pending for the final commit.
 
 ## 1. Public API and CLI parity
 
@@ -53,7 +53,7 @@ pending for this checkpoint.
 - [x] Add aPLib-compatible payload compression in the Go generator; a native C
   depacker fixture and Go round-trip tests pass. Keep source provenance clear.
 - [x] Support per-function encrypted dispatch: the embedded MinGW images have
-  six sections and 60 cross-section references per PEB variant. Four helper
+  six sections and 61 cross-section references per PEB variant. Four helper
   sections are protected; `.text` and the hash section stay resident for
   host-continuation concurrency. Static thunk and function-table tests pass.
 - [x] Vary N>1 dispatcher state registers, save order, inert instructions,

@@ -224,7 +224,7 @@ try {
 
     Invoke-TestCase "native-executable" {
         Invoke-CLILoaderCase -Label "native-executable" -InputPath $NativeExe -Options @("-thread", "-args", "churro-exe-argument") -Markers @{
-            ".exe" = "native executable entry"
+            ".entry" = "native executable entry"
             ".argv" = "native executable arguments"
         }
     }

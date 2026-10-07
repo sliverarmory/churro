@@ -43,8 +43,8 @@ func TestEmbeddedLoaderBundleMetadata(t *testing.T) {
 	if got := len(bundle.PEB1Meta.Functions); got != 6 {
 		t.Fatalf("PEB1 function count = %d, want 6", got)
 	}
-	if got := len(bundle.PEB2Meta.References); got != 60 {
-		t.Fatalf("PEB2 reference count = %d, want 60", got)
+	if got := len(bundle.PEB2Meta.References); got != 61 {
+		t.Fatalf("PEB2 reference count = %d, want 61", got)
 	}
 	if err := bundle.validate(); err != nil {
 		t.Fatalf("embedded bundle validation: %v", err)

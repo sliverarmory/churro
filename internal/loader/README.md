@@ -27,6 +27,11 @@ encrypting it during another call would race. The other four sections use
 call thunks. The shim's protection and wipe length includes the appended
 dispatcher and thunk tail.
 
+Host continuation resolves `RtlCaptureContext` through the existing PEB/hash
+resolver to capture the running thread before `NtContinue`. This keeps the
+61-import wire layout unchanged; `GetThreadContext` cannot provide a valid
+context for the current running thread.
+
 `scripts/rebuild-loader-blobs.sh` builds both PEB variants and the dispatch
 shim with x64 MinGW, then emits `*.bin`, `*_metadata.json`, and `bundle.json`
 into `internal/assets/`. It checks the pinned Poly/API headers before a normal
